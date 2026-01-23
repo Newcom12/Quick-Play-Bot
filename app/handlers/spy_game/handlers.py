@@ -19,7 +19,7 @@ from sqlalchemy import select
 router = Router()
 
 
-def create_number_keyboard(min_val: int, max_val: int, callback_prefix: str) -> InlineKeyboardMarkup:
+def create_number_keyboard(min_val: int, max_val: int, callback_prefix: str, add_random: bool = False) -> InlineKeyboardMarkup:
     """Создает клавиатуру с числами."""
     buttons = []
     row = []
@@ -32,6 +32,10 @@ def create_number_keyboard(min_val: int, max_val: int, callback_prefix: str) -> 
     
     if row:
         buttons.append(row)
+    
+    # Добавляем кнопку "Случайно" если нужно
+    if add_random:
+        buttons.append([InlineKeyboardButton(text="🎲 Случайно", callback_data=f"{callback_prefix}:random")])
     
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_game")])
     
@@ -71,7 +75,7 @@ async def set_players_count(callback: CallbackQuery, state: FSMContext):
     await state.update_data(players_count=players_count)
     await state.set_state(SpyGameStates.waiting_for_spies_count)
     
-    keyboard = create_number_keyboard(1, players_count - 1, "spies_count")
+    keyboard = create_number_keyboard(1, players_count - 1, "spies_count", add_random=True)
     
     await callback.message.edit_text(
         f"✅ Игроков: <b>{players_count}</b>\n\n"
@@ -84,11 +88,32 @@ async def set_players_count(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("spies_count:"), StateFilter(SpyGameStates.waiting_for_spies_count))
 async def set_spies_count(callback: CallbackQuery, state: FSMContext):
     """Устанавливает количество шпионов."""
-    spies_count = int(callback.data.split(":")[1])
     data = await state.get_data()
     players_count = data.get("players_count")
     
+    # Проверяем, выбран ли случайный вариант
+    if callback.data.endswith(":random"):
+        import random
+        # Случайное количество шпионов от 1 до players_count - 1
+        spies_count = random.randint(1, players_count - 1)
+    else:
+        spies_count = int(callback.data.split(":")[1])
+    
     await state.update_data(spies_count=spies_count)
+    
+    # Если был выбран случайный вариант, показываем результат
+    if callback.data.endswith(":random"):
+        await callback.message.edit_text(
+            f"✅ Игроков: <b>{players_count}</b>\n"
+            f"🎲 Шпионов (случайно): <b>{spies_count}</b>\n\n"
+            "⏳ Настраиваю игру..."
+        )
+    else:
+        await callback.message.edit_text(
+            f"✅ Игроков: <b>{players_count}</b>\n"
+            f"✅ Шпионов: <b>{spies_count}</b>\n\n"
+            "⏳ Настраиваю игру..."
+        )
     
     # Загружаем карты из базы данных
     async for db in get_db():
@@ -346,29 +371,48 @@ async def handle_vote(callback: CallbackQuery, state: FSMContext):
     if is_spy:
         # Удаляем шпиона из игры
         game.players.remove(voted_player)
+    else:
+        # Удаляем обычного игрока из игры
+        game.players.remove(voted_player)
     
     # Проверяем условия окончания игры
     game_result = game.check_game_end()
     
     if game_result == 'players_win':
-        await callback.message.edit_text(
-            f"{result_text}\n\n"
-            "🎉 <b>Игроки победили!</b>\n"
-            "Все шпионы найдены!"
-        )
+        spies_remaining = len(game.get_spies())
+        if spies_remaining == 0:
+            await callback.message.edit_text(
+                f"{result_text}\n\n"
+                "🎉 <b>Игроки победили!</b>\n"
+                "Все шпионы найдены!"
+            )
+        else:
+            await callback.message.edit_text(
+                f"{result_text}\n\n"
+                "🎉 <b>Игроки победили!</b>\n"
+                f"Осталось 2 человека, среди них нет шпионов!"
+            )
         game_manager.stop_game(callback.from_user.id)
         await state.clear()
     elif game_result == 'spies_win':
+        spies_remaining = len(game.get_spies())
         await callback.message.edit_text(
             f"{result_text}\n\n"
-            "🕵️ <b>Шпионы победили!</b>"
+            "🕵️ <b>Шпионы победили!</b>\n"
+            f"Осталось 2 человека, среди них есть шпион(ы)!"
         )
         game_manager.stop_game(callback.from_user.id)
         await state.clear()
     else:
+        remaining_players = len(game.players)
+        spies_remaining = len(game.get_spies())
+        regular_remaining = len(game.get_regular_players())
+        
         await callback.message.edit_text(
             f"{result_text}\n\n"
-            "Игра продолжается..."
+            f"Игра продолжается...\n"
+            f"Осталось игроков: {remaining_players}\n"
+            f"Шпионов: {spies_remaining}, Обычных: {regular_remaining}"
         )
         await state.set_state(SpyGameStates.game_in_progress)
     

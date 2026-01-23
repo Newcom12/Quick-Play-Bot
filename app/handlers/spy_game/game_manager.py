@@ -60,24 +60,30 @@ class Game:
         """
         Проверяет условия окончания игры.
         Returns: 'spies_win', 'players_win', 'continue' или None
+        
+        Игра заканчивается только когда осталось 2 человека:
+        - Если среди 2 человек есть хотя бы 1 шпион -> шпионы выигрывают
+        - Если среди 2 человек нет шпионов -> обычные игроки выигрывают
         """
         spies = self.get_spies()
         regular = self.get_regular_players()
         
         spies_count = len(spies)
         regular_count = len(regular)
+        total_remaining = spies_count + regular_count
         
-        # Все шпионы угаданы
-        if spies_count == 0:
-            return 'players_win'
+        # Игра заканчивается только когда осталось 2 человека
+        if total_remaining == 2:
+            # Если среди 2 человек есть хотя бы 1 шпион -> шпионы выигрывают
+            if spies_count >= 1:
+                return 'spies_win'
+            # Если среди 2 человек нет шпионов -> обычные игроки выигрывают
+            else:
+                return 'players_win'
         
-        # Шпионы победили (шпионов >= обычных игроков)
-        if spies_count >= regular_count:
-            return 'spies_win'
-        
-        # Остался 1 шпион и 1 игрок - игрок автоматически знает шпиона
-        if spies_count == 1 and regular_count == 1:
-            return 'players_win'
+        # Если осталось меньше 2 человек - ошибка состояния
+        if total_remaining < 2:
+            return 'players_win'  # По умолчанию игроки выигрывают
         
         return 'continue'
 

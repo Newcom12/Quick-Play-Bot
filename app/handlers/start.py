@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from app.bot import bot
+from app.bot import bot, get_main_keyboard
 from app.config import settings
 from app.database import get_db
 from app.models import User
@@ -28,13 +28,23 @@ async def check_subscription_callback(callback: CallbackQuery):
             await callback.answer("❌ Вы еще не подписались на канал", show_alert=True)
             return
     except Exception as e:
-        logger.error(f"Ошибка при проверке подписки: {e}")
-        await callback.answer("Ошибка при проверке подписки", show_alert=True)
-        return
+        error_msg = str(e).lower()
+        if "member list is inaccessible" in error_msg or "chat not found" in error_msg:
+            logger.warning(f"Бот не может проверить подписку. Продолжаем работу.")
+            # Продолжаем работу, если бот не может проверить подписку
+        else:
+            logger.error(f"Ошибка при проверке подписки: {e}")
+            await callback.answer("Ошибка при проверке подписки. Попробуйте позже.", show_alert=True)
+            return
     
     # Если подписан, показываем главное меню
     await cmd_start(callback.message)
     await callback.answer("✅ Отлично!")
+    # Устанавливаем reply клавиатуру
+    await callback.message.answer(
+        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
+        reply_markup=get_main_keyboard()
+    )
 
 
 @router.message(Command("start"))
@@ -61,8 +71,14 @@ async def cmd_start(message: Message):
                 )
                 return
         except Exception as e:
-            logger.error(f"Ошибка при проверке подписки: {e}")
-            # Продолжаем работу в случае ошибки
+            error_msg = str(e).lower()
+            if "member list is inaccessible" in error_msg or "chat not found" in error_msg:
+                logger.warning(f"Бот не может проверить подписку на канал {settings.CHANNEL_ID}. "
+                             f"Убедитесь, что бот добавлен в канал как администратор.")
+                # Продолжаем работу, но логируем предупреждение
+            else:
+                logger.error(f"Ошибка при проверке подписки: {e}")
+                # Продолжаем работу в случае ошибки
     
     async for db in get_db():
         try:
@@ -101,6 +117,7 @@ async def cmd_start(message: Message):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎮 Играть в Шпиона", callback_data="start_spy_game")],
+        [InlineKeyboardButton(text="📖 Правила", callback_data="show_rules")],
         [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="show_help")]
     ])
     
@@ -110,4 +127,11 @@ async def cmd_start(message: Message):
         "Выберите действие:"
     )
     
+    # Отправляем сообщение с inline кнопками
     await message.answer(welcome_message, reply_markup=keyboard)
+    
+    # Устанавливаем постоянную reply клавиатуру
+    await message.answer(
+        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
+        reply_markup=get_main_keyboard()
+    )

@@ -44,7 +44,13 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
                 return
             
         except Exception as e:
-            logger.error(f"Ошибка при проверке подписки: {e}")
+            error_msg = str(e).lower()
+            if "member list is inaccessible" in error_msg or "chat not found" in error_msg:
+                logger.warning(f"Бот не может проверить подписку на канал {settings.CHANNEL_ID}. "
+                             f"Убедитесь, что бот добавлен в канал как администратор.")
+                # Пропускаем проверку, если бот не может получить доступ
+            else:
+                logger.error(f"Ошибка при проверке подписки: {e}")
             # В случае ошибки пропускаем проверку
         
         return await handler(event, data)

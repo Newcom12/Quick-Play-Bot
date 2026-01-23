@@ -5,6 +5,7 @@ import asyncio
 from app.bot import bot, dp, on_startup, on_shutdown
 from app.database import init_db
 from app.handlers import start, help
+from app.handlers import rules
 from app.handlers.spy_game import handlers as spy_game_handlers
 from app.middleware.channel_subscription import ChannelSubscriptionMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -28,6 +29,7 @@ async def main():
         # Регистрация роутеров
         dp.include_router(start.router)
         dp.include_router(help.router)
+        dp.include_router(rules.router)
         dp.include_router(spy_game_handlers.router)
         logger.info("Роутеры успешно зарегистрированы")
 
