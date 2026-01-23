@@ -76,12 +76,8 @@ async def cmd_rules(message: Message):
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_start")]
     ])
     
-    # Отправляем правила с inline кнопкой и устанавливаем reply клавиатуру
+    # Отправляем правила с inline кнопкой
     await message.answer(rules_text, reply_markup=keyboard)
-    await message.answer(
-        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
-        reply_markup=get_main_keyboard()
-    )
 
 
 @router.message(F.text == "📖 Правила")

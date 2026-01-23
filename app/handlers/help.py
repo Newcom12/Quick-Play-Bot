@@ -44,14 +44,8 @@ async def cmd_help(message: Message):
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_start")]
     ])
     
-    from app.bot import get_main_keyboard
-    
-    # Отправляем помощь с inline кнопкой и устанавливаем reply клавиатуру
+    # Отправляем помощь с inline кнопкой
     await message.answer(help_text, reply_markup=keyboard)
-    await message.answer(
-        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
-        reply_markup=get_main_keyboard()
-    )
 
 
 @router.callback_query(F.data == "back_to_start")

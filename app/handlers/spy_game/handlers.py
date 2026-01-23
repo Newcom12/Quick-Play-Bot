@@ -381,12 +381,14 @@ async def handle_vote(callback: CallbackQuery, state: FSMContext):
     if game_result == 'players_win':
         spies_remaining = len(game.get_spies())
         if spies_remaining == 0:
+            # Все шпионы найдены
             await callback.message.edit_text(
                 f"{result_text}\n\n"
                 "🎉 <b>Игроки победили!</b>\n"
                 "Все шпионы найдены!"
             )
         else:
+            # Осталось 2 человека, среди них нет шпионов
             await callback.message.edit_text(
                 f"{result_text}\n\n"
                 "🎉 <b>Игроки победили!</b>\n"

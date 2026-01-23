@@ -40,11 +40,6 @@ async def check_subscription_callback(callback: CallbackQuery):
     # Если подписан, показываем главное меню
     await cmd_start(callback.message)
     await callback.answer("✅ Отлично!")
-    # Устанавливаем reply клавиатуру
-    await callback.message.answer(
-        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
-        reply_markup=get_main_keyboard()
-    )
 
 
 @router.message(Command("start"))
@@ -115,6 +110,13 @@ async def cmd_start(message: Message):
             raise
         break
     
+    # Сначала устанавливаем постоянную reply клавиатуру (ПЕРВЫМ сообщением)
+    await message.answer(
+        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
+        reply_markup=get_main_keyboard()
+    )
+    
+    # Затем отправляем основное меню с inline кнопками
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎮 Играть в Шпиона", callback_data="start_spy_game")],
         [InlineKeyboardButton(text="📖 Правила", callback_data="show_rules")],
@@ -126,12 +128,4 @@ async def cmd_start(message: Message):
         "🎮 Добро пожаловать в <b>QuickPlayBot</b>!\n\n"
         "Выберите действие:"
     )
-    
-    # Отправляем сообщение с inline кнопками
     await message.answer(welcome_message, reply_markup=keyboard)
-    
-    # Устанавливаем постоянную reply клавиатуру
-    await message.answer(
-        "💡 <i>Используйте кнопки ниже для быстрого доступа</i>",
-        reply_markup=get_main_keyboard()
-    )
