@@ -14,7 +14,7 @@ from app.handlers.spy_game.game_manager import game_manager
 from app.handlers.spy_game.states import SpyGameStates
 from app.models import ClashRoyaleCard, SpyCard
 from app.utils.logger import logger
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 router = Router()
 
@@ -75,7 +75,8 @@ async def set_players_count(callback: CallbackQuery, state: FSMContext):
     await state.update_data(players_count=players_count)
     await state.set_state(SpyGameStates.waiting_for_spies_count)
     
-    keyboard = create_number_keyboard(1, players_count - 1, "spies_count", add_random=True)
+    # Разрешаем выбрать от 1 до players_count (включительно) - можно выбрать всех как шпионов
+    keyboard = create_number_keyboard(1, players_count, "spies_count", add_random=True)
     
     await callback.message.edit_text(
         f"✅ Игроков: <b>{players_count}</b>\n\n"
@@ -94,63 +95,83 @@ async def set_spies_count(callback: CallbackQuery, state: FSMContext):
     # Проверяем, выбран ли случайный вариант
     if callback.data.endswith(":random"):
         import random
-        # Случайное количество шпионов от 1 до players_count - 1
-        spies_count = random.randint(1, players_count - 1)
+        # Случайное количество шпионов от 1 до players_count (включительно)
+        spies_count = random.randint(1, players_count)
     else:
         spies_count = int(callback.data.split(":")[1])
     
-    await state.update_data(spies_count=spies_count)
-    
-    # Если был выбран случайный вариант, показываем результат
+    # Не показываем количество шпионов игрокам (для интриги)
     if callback.data.endswith(":random"):
         await callback.message.edit_text(
             f"✅ Игроков: <b>{players_count}</b>\n"
-            f"🎲 Шпионов (случайно): <b>{spies_count}</b>\n\n"
+            f"🎲 Количество шпионов выбрано случайно\n\n"
             "⏳ Настраиваю игру..."
         )
     else:
         await callback.message.edit_text(
             f"✅ Игроков: <b>{players_count}</b>\n"
-            f"✅ Шпионов: <b>{spies_count}</b>\n\n"
+            f"🕵️ Количество шпионов настроено\n\n"
             "⏳ Настраиваю игру..."
         )
     
+    await state.update_data(spies_count=spies_count)
+    
     # Загружаем карты из базы данных
+    cards_list = []
     async for db in get_db():
-        result = await db.execute(select(ClashRoyaleCard).where(ClashRoyaleCard.file_id.isnot(None)))
-        cards = result.scalars().all()
-        
-        cards_list = [{"name": card.name, "file_id": card.file_id} for card in cards]
-        
-        if not cards_list:
-            await callback.message.edit_text(
-                "❌ Карты не найдены в базе данных. Пожалуйста, сначала загрузите карты."
-            )
-            await callback.answer()
-            await state.clear()
-            return
-        
-        # Настраиваем игру
-        game = game_manager.setup_game(
-            callback.from_user.id,
-            players_count,
-            spies_count,
-            cards_list
-        )
-        
-        if not game:
-            await callback.message.edit_text("❌ Ошибка при создании игры")
-            await callback.answer()
-            await state.clear()
-            return
-        
-        await state.set_state(SpyGameStates.showing_cards)
-        await state.update_data(current_player_index=0)
-        
-        # Показываем карту первому игроку
-        await show_player_card(callback.message, state, game)
-        await callback.answer()
+        try:
+            # Загружаем все карты из БД
+            result = await db.execute(select(ClashRoyaleCard))
+            all_cards = result.scalars().all()
+            
+            logger.info(f"Всего карт в БД: {len(all_cards)}")
+            
+            # Фильтруем карты с file_id
+            cards_list = [
+                {"name": card.name, "file_id": card.file_id} 
+                for card in all_cards 
+                if card.file_id and card.file_id.strip()
+            ]
+            
+            logger.info(f"Карт с file_id: {len(cards_list)}")
+            
+            if not cards_list and all_cards:
+                logger.warning(
+                    f"В БД есть {len(all_cards)} карт, но ни у одной нет file_id. "
+                    f"Возможно, нужно загрузить file_id через upload_cards_to_bot."
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке карт из БД: {e}", exc_info=True)
         break
+    
+    if not cards_list:
+        await callback.message.edit_text(
+            "❌ Карты не найдены в базе данных. Пожалуйста, сначала загрузите карты."
+        )
+        await callback.answer()
+        await state.clear()
+        return
+    
+    # Настраиваем игру
+    game = game_manager.setup_game(
+        callback.from_user.id,
+        players_count,
+        spies_count,
+        cards_list
+    )
+    
+    if not game:
+        await callback.message.edit_text("❌ Ошибка при создании игры")
+        await callback.answer()
+        await state.clear()
+        return
+    
+    await state.set_state(SpyGameStates.showing_cards)
+    await state.update_data(current_player_index=0)
+    
+    # Показываем карту первому игроку
+    await show_player_card(callback.message, state, game)
+    await callback.answer()
 
 
 async def show_player_card(message, state: FSMContext, game):
@@ -199,6 +220,7 @@ async def handle_show_card(callback: CallbackQuery, state: FSMContext):
     ])
     
     if current_player.is_spy:
+        # Каждый шпион видит обычное сообщение, не зная что все шпионы
         text = (
             "🕵️ <b>ВЫ ШПИОН!</b>\n\n"
             "Ваша задача - не выдать себя и вычислить тему игры."
@@ -245,6 +267,7 @@ async def start_game(message, state: FSMContext, game):
         [InlineKeyboardButton(text="🗳️ Голосовать", callback_data="start_voting")]
     ])
     
+    # Игра начинается одинаково для всех (не показываем что все шпионы)
     text = (
         "🎮 <b>Игра началась!</b>\n\n"
         "⏱️ Таймер запущен. Обсудите и найдите шпионов!"

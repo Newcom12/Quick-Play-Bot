@@ -142,37 +142,48 @@ class GameManager:
         game.players_count = players_count
         game.spies_count = spies_count
         
-        # Выбираем случайные карты для обычных игроков
-        regular_cards = random.sample(cards, min(len(cards), players_count - spies_count))
-        
         # Создаем игроков
         players = []
-        card_index = 0
         
         # Определяем, кто будет шпионом
         spy_indices = set(random.sample(range(players_count), spies_count))
         
-        for i in range(players_count):
-            is_spy = i in spy_indices
-            
-            if is_spy:
-                player = Player(
-                    user_id=user_id,  # Все играют на одном телефоне
-                    username=f"Игрок {i + 1}",
-                    is_spy=True
-                )
-            else:
-                card = regular_cards[card_index % len(regular_cards)]
+        # Если все игроки - шпионы, не нужно выбирать карты
+        if spies_count == players_count:
+            # Все игроки - шпионы
+            for i in range(players_count):
                 player = Player(
                     user_id=user_id,
                     username=f"Игрок {i + 1}",
-                    is_spy=False,
-                    card_name=card['name'],
-                    file_id=card['file_id']
+                    is_spy=True
                 )
-                card_index += 1
+                players.append(player)
+        else:
+            # Есть обычные игроки - выбираем карты для них
+            regular_cards = random.sample(cards, min(len(cards), players_count - spies_count))
+            card_index = 0
             
-            players.append(player)
+            for i in range(players_count):
+                is_spy = i in spy_indices
+                
+                if is_spy:
+                    player = Player(
+                        user_id=user_id,  # Все играют на одном телефоне
+                        username=f"Игрок {i + 1}",
+                        is_spy=True
+                    )
+                else:
+                    card = regular_cards[card_index % len(regular_cards)]
+                    player = Player(
+                        user_id=user_id,
+                        username=f"Игрок {i + 1}",
+                        is_spy=False,
+                        card_name=card['name'],
+                        file_id=card['file_id']
+                    )
+                    card_index += 1
+                
+                players.append(player)
         
         game.players = players
         logger.info(f"Игра настроена: {players_count} игроков, {spies_count} шпионов")

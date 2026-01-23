@@ -60,3 +60,23 @@ class SpyCard(Base):
 
     def __repr__(self):
         return f"<SpyCard(name={self.name}, game={self.game_name})>"
+
+
+class PlayerStats(Base):
+    """Модель статистики игрока в игре Шпион."""
+
+    __tablename__ = "player_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    player_name = Column(String, index=True, nullable=False)  # Имя игрока
+    games_played = Column(Integer, default=0, nullable=False)  # Всего игр
+    wins = Column(Integer, default=0, nullable=False)  # Всего побед
+    wins_by_guessing = Column(Integer, default=0, nullable=False)  # Побед угадыванием темы (как шпион)
+    wins_by_last_standing = Column(Integer, default=0, nullable=False)  # Побед как последний оставшийся
+    wins_by_timer = Column(Integer, default=0, nullable=False)  # Побед по таймеру
+    losses = Column(Integer, default=0, nullable=False)  # Поражений
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<PlayerStats(player_name={self.player_name}, wins={self.wins}, games={self.games_played})>"
