@@ -33,7 +33,9 @@ class Card(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
     image_path = Column(String, nullable=False)
+    file_id = Column(String, nullable=True)  # Telegram file_id для изображения
     image_path_evolution = Column(String, nullable=True)  # Путь к картинке с эволюцией
+    file_id_evolution = Column(String, nullable=True)  # Telegram file_id для изображения эволюции
     has_evolution = Column(Boolean, default=False, nullable=False)
     group = Column(String, nullable=False)  # Spells, Melee, Ranged и т.д.
     elixir_cost = Column(Integer, nullable=False)
