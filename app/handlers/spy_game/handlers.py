@@ -7,7 +7,8 @@ from typing import List
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputMediaPhoto
+from app.bot import bot
 
 from app.database import get_db
 from app.handlers.spy_game.game_manager import game_manager
@@ -84,7 +85,8 @@ async def handle_evolution_setting(callback: CallbackQuery, state: FSMContext):
     if evolution_setting == "random":
         import random
         use_evolutions = random.choice([True, False])
-        setting_text = f"🎲 Случайно: {'✅ Использовать' if use_evolutions else '❌ Не использовать'}"
+        # Не показываем результат случайного выбора
+        setting_text = "🎲 Случайно"
     elif evolution_setting == "true":
         use_evolutions = True
         setting_text = "✅ Использовать эволюции"
@@ -93,17 +95,207 @@ async def handle_evolution_setting(callback: CallbackQuery, state: FSMContext):
         setting_text = "❌ Не использовать эволюции"
     
     await state.update_data(use_evolutions=use_evolutions)
-    await state.set_state(SpyGameStates.waiting_for_players_count)
     
-    keyboard = create_number_keyboard(3, 10, "players_count")
+    # Загружаем сохраненных игроков
+    user_id = callback.from_user.id
+    saved_players = []
+    async for db in get_db():
+        try:
+            from app.models import SavedPlayer
+            result = await db.execute(
+                select(SavedPlayer).where(SavedPlayer.user_id == user_id).order_by(SavedPlayer.created_at)
+            )
+            saved_players = result.scalars().all()
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке сохраненных игроков: {e}", exc_info=True)
+        break
+    
+    if saved_players:
+        # Есть сохраненные игроки - переходим к выбору
+        await state.set_state(SpyGameStates.selecting_players)
+        await state.update_data(selected_players=[])  # Список выбранных игроков
+        
+        await show_players_selection(callback.message, state, saved_players)
+    else:
+        # Нет сохраненных игроков - переходим к выбору количества
+        await state.set_state(SpyGameStates.waiting_for_players_count)
+        keyboard = create_number_keyboard(3, 10, "players_count")
+        
+        # Не показываем настройку эволюций в сообщении (для интриги)
+        await callback.message.edit_text(
+            "🎮 <b>Игра Шпион</b>\n\n"
+            "👥 Выберите количество игроков:",
+            reply_markup=keyboard
+        )
+    
+    await callback.answer()
+
+
+async def show_players_selection(message, state: FSMContext, saved_players):
+    """Показывает список сохраненных игроков для выбора."""
+    data = await state.get_data()
+    selected_players = data.get("selected_players", [])
+    
+    text = "👥 <b>Выбор игроков</b>\n\n"
+    text += "Выберите игроков, которые будут участвовать:\n\n"
+    
+    buttons = []
+    for player in saved_players:
+        is_selected = player.id in selected_players
+        emoji = "✅" if is_selected else "❌"
+        buttons.append([InlineKeyboardButton(
+            text=f"{emoji} {player.name}",
+            callback_data=f"toggle_player:{player.id}"
+        )])
+    
+    # Показываем количество выбранных
+    selected_count = len(selected_players)
+    text += f"<b>Выбрано: {selected_count}</b>\n\n"
+    
+    if selected_count >= 3:
+        buttons.append([InlineKeyboardButton(text="✅ Продолжить", callback_data="confirm_players_selection")])
+    
+    buttons.append([InlineKeyboardButton(text="➕ Добавить нового игрока", callback_data="add_new_player_in_game")])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_game")])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    try:
+        await message.edit_text(text, reply_markup=keyboard)
+    except:
+        await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("toggle_player:"), StateFilter(SpyGameStates.selecting_players))
+async def handle_toggle_player(callback: CallbackQuery, state: FSMContext):
+    """Переключает выбор игрока."""
+    player_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+    
+    data = await state.get_data()
+    selected_players = data.get("selected_players", [])
+    
+    if player_id in selected_players:
+        selected_players.remove(player_id)
+    else:
+        selected_players.append(player_id)
+    
+    await state.update_data(selected_players=selected_players)
+    
+    # Загружаем список сохраненных игроков
+    saved_players = []
+    async for db in get_db():
+        try:
+            from app.models import SavedPlayer
+            result = await db.execute(
+                select(SavedPlayer).where(SavedPlayer.user_id == user_id).order_by(SavedPlayer.created_at)
+            )
+            saved_players = result.scalars().all()
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке сохраненных игроков: {e}", exc_info=True)
+        break
+    
+    await show_players_selection(callback.message, state, saved_players)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm_players_selection", StateFilter(SpyGameStates.selecting_players))
+async def handle_confirm_players_selection(callback: CallbackQuery, state: FSMContext):
+    """Подтверждает выбор игроков и переходит к выбору количества шпионов."""
+    data = await state.get_data()
+    selected_players = data.get("selected_players", [])
+    user_id = callback.from_user.id
+    
+    if len(selected_players) < 3:
+        await callback.answer("Минимум 3 игрока для игры", show_alert=True)
+        return
+    
+    # Загружаем имена выбранных игроков
+    selected_names = []
+    async for db in get_db():
+        try:
+            from app.models import SavedPlayer
+            result = await db.execute(
+                select(SavedPlayer).where(SavedPlayer.id.in_(selected_players))
+            )
+            players = result.scalars().all()
+            selected_names = [p.name for p in players]
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке выбранных игроков: {e}", exc_info=True)
+        break
+    
+    players_count = len(selected_names)
+    await state.update_data(players_count=players_count, selected_player_names=selected_names)
+    await state.set_state(SpyGameStates.waiting_for_spies_count)
+    
+    # Разрешаем выбрать от 1 до players_count (включительно)
+    keyboard = create_number_keyboard(1, players_count, "spies_count", add_random=True)
     
     await callback.message.edit_text(
-        f"🎮 <b>Игра Шпион</b>\n\n"
-        f"🔄 Эволюции: {setting_text}\n\n"
-        "👥 Выберите количество игроков:",
+        f"✅ Игроков выбрано: <b>{players_count}</b>\n\n"
+        f"Игроки: {', '.join(selected_names)}\n\n"
+        "🕵️ Выберите количество шпионов:",
         reply_markup=keyboard
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "add_new_player_in_game", StateFilter(SpyGameStates.selecting_players))
+async def handle_add_new_player_in_game(callback: CallbackQuery, state: FSMContext):
+    """Добавляет нового игрока прямо во время выбора."""
+    await state.set_state("waiting_for_player_name_in_game")
+    await callback.message.edit_text(
+        "➕ <b>Добавление игрока</b>\n\n"
+        "Введите имя нового игрока:"
+    )
+    await callback.answer()
+
+
+@router.message(F.text, lambda m, state: state.get_state() == "waiting_for_player_name_in_game")
+async def handle_player_name_input_in_game(message: Message, state: FSMContext):
+    """Обрабатывает ввод имени игрока во время игры."""
+    player_name = message.text.strip()
+    
+    if not player_name or len(player_name) > 50:
+        await message.answer("❌ Имя должно быть от 1 до 50 символов. Попробуйте снова:")
+        return
+    
+    user_id = message.from_user.id
+    
+    async for db in get_db():
+        try:
+            from app.models import SavedPlayer
+            # Создаем нового игрока
+            new_player = SavedPlayer(
+                user_id=user_id,
+                name=player_name
+            )
+            db.add(new_player)
+            await db.commit()
+            
+            # Добавляем его в выбранные
+            data = await state.get_data()
+            selected_players = data.get("selected_players", [])
+            selected_players.append(new_player.id)
+            await state.update_data(selected_players=selected_players)
+            
+            logger.info(f"Добавлен игрок {player_name} для пользователя {user_id}")
+            await message.answer(f"✅ Игрок '{player_name}' добавлен и выбран!")
+            
+            # Загружаем обновленный список
+            result = await db.execute(
+                select(SavedPlayer).where(SavedPlayer.user_id == user_id).order_by(SavedPlayer.created_at)
+            )
+            saved_players = result.scalars().all()
+            
+            await state.set_state(SpyGameStates.selecting_players)
+            await show_players_selection(message, state, saved_players)
+            
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Ошибка при добавлении игрока: {e}", exc_info=True)
+            await message.answer("❌ Ошибка при добавлении игрока")
+        break
 
 
 @router.message(Command("spy"))
@@ -341,6 +533,7 @@ async def handle_start_game_setup(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     game_type = data.get("game_type", "clash_royale")
     use_evolutions = data.get("use_evolutions", False)
+    selected_player_names = data.get("selected_player_names", [])
     
     # Загружаем карты из базы данных
     cards_list = []
@@ -381,6 +574,10 @@ async def handle_start_game_setup(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         await state.clear()
         return
+    
+    # Если есть выбранные имена игроков, используем их вместо players_list
+    if selected_player_names:
+        players_list = [{"name": name, "index": i} for i, name in enumerate(selected_player_names)]
     
     # Настраиваем игру
     game = game_manager.setup_game(
@@ -453,45 +650,104 @@ async def handle_show_card(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_game")]
     ])
     
+    chat_id = callback.message.chat.id
+    game.card_messages_ids.clear()  # Очищаем предыдущие сообщения
+    
     if current_player.is_spy:
-        # Каждый шпион видит обычное сообщение, не зная что все шпионы
+        # Шпион видит картинку шпиона
+        # Загружаем картинку шпиона из БД
+        spy_file_id = None
+        async for db in get_db():
+            try:
+                result = await db.execute(
+                    select(SpyCard).where(SpyCard.name == "spy")
+                )
+                spy_card = result.scalar_one_or_none()
+                if spy_card and spy_card.file_id:
+                    spy_file_id = spy_card.file_id
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке карты шпиона: {e}", exc_info=True)
+            break
+        
         text = (
             "🕵️ <b>ВЫ ШПИОН!</b>\n\n"
             "Ваша задача - не выдать себя и вычислить тему игры."
         )
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Отправляем картинку шпиона с текстом и кнопками в одном сообщении
+        if spy_file_id:
+            message = await bot.send_photo(
+                chat_id=chat_id,
+                photo=spy_file_id,
+                caption=text,
+                reply_markup=keyboard
+            )
+            game.card_messages_ids.append(message.message_id)
+        else:
+            # Если нет картинки, отправляем только текст
+            message = await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard
+            )
+            game.card_messages_ids.append(message.message_id)
+        
     else:
         # Обычный игрок видит карту
         if current_player.has_evolution and current_player.file_id_evolution:
-            # Карта с эволюцией - отправляем обе картинки
-            text = (
+            # Карта с эволюцией - отправляем обе картинки в media group
+            # Текст и кнопки будут в caption последней картинки
+            media_list = []
+            
+            if current_player.file_id:
+                media_list.append(InputMediaPhoto(media=current_player.file_id))
+            
+            # Текст и кнопки добавляем к последней картинке (эволюции)
+            caption = (
                 f"🎴 <b>Ваша карта:</b> {current_player.card_name}\n\n"
                 "✨ <b>У этой карты есть эволюция!</b>\n\n"
-                "Ниже показаны оба варианта:"
+                "Выше показаны оба варианта:"
             )
-            await callback.message.edit_text(text, reply_markup=keyboard)
             
-            # Отправляем обычную версию
-            if current_player.file_id:
-                await callback.message.answer_photo(
-                    current_player.file_id,
-                    caption=f"🎴 {current_player.card_name} (Обычная версия)"
-                )
+            media_list.append(InputMediaPhoto(
+                media=current_player.file_id_evolution,
+                caption=caption
+            ))
             
-            # Отправляем эволюцию
-            await callback.message.answer_photo(
-                current_player.file_id_evolution,
-                caption=f"✨ {current_player.card_name} (Эволюция)"
+            # Отправляем media group
+            messages = await bot.send_media_group(chat_id=chat_id, media=media_list)
+            game.card_messages_ids.extend([msg.message_id for msg in messages])
+            
+            # Редактируем последнее сообщение из media group, добавляя кнопки
+            # В Telegram нельзя добавить inline кнопки к media group напрямую,
+            # поэтому отправляем отдельное сообщение с кнопками сразу после
+            text_message = await bot.send_message(
+                chat_id=chat_id,
+                text=" ",  # Минимальный текст
+                reply_markup=keyboard
             )
+            game.card_messages_ids.append(text_message.message_id)
+            
         else:
-            # Обычная карта без эволюции
+            # Обычная карта без эволюции - все в одном сообщении
             text = f"🎴 <b>Ваша карта:</b> {current_player.card_name}"
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            
             if current_player.file_id:
-                await callback.message.answer_photo(
-                    current_player.file_id,
-                    caption=f"🎴 {current_player.card_name}"
+                message = await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=current_player.file_id,
+                    caption=text,
+                    reply_markup=keyboard
                 )
+                game.card_messages_ids.append(message.message_id)
+            else:
+                # Если нет картинки, отправляем только текст
+                message = await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=keyboard
+                )
+                game.card_messages_ids.append(message.message_id)
     
     await callback.answer()
 
@@ -503,6 +759,16 @@ async def handle_hide_card(callback: CallbackQuery, state: FSMContext):
     if not game:
         await callback.answer("Игра не найдена", show_alert=True)
         return
+    
+    # Удаляем все сообщения с картинками
+    chat_id = callback.message.chat.id
+    for msg_id in game.card_messages_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение {msg_id}: {e}")
+    
+    game.card_messages_ids.clear()
     
     next_player = game.next_player()
     
@@ -772,6 +1038,14 @@ async def handle_cancel_game(callback: CallbackQuery, state: FSMContext):
     """Отменяет игру."""
     game = game_manager.get_game(callback.from_user.id)
     if game:
+        # Удаляем все сообщения с картинками
+        chat_id = callback.message.chat.id
+        for msg_id in game.card_messages_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                logger.debug(f"Не удалось удалить сообщение {msg_id}: {e}")
+        
         game_manager.stop_game(callback.from_user.id)
     
     await state.clear()

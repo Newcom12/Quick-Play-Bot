@@ -37,6 +37,7 @@ class Game:
     votes: Dict[int, int] = field(default_factory=dict)  # user_id -> voted_for_user_id
     game_theme: Optional[str] = None  # Тема игры (название карты для обычных игроков)
     timer_expired: bool = False  # Истек ли таймер
+    card_messages_ids: List[int] = field(default_factory=list)  # ID сообщений с картинками для удаления
     
     def get_current_player(self) -> Optional[Player]:
         """Возвращает текущего игрока."""

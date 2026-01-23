@@ -80,3 +80,18 @@ class PlayerStats(Base):
 
     def __repr__(self):
         return f"<PlayerStats(player_name={self.player_name}, wins={self.wins}, games={self.games_played})>"
+
+
+class SavedPlayer(Base):
+    """Модель сохраненного игрока (для быстрого доступа)."""
+
+    __tablename__ = "saved_players"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=False)  # ID пользователя Telegram (владелец списка)
+    name = Column(String, nullable=False)  # Имя игрока
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<SavedPlayer(user_id={self.user_id}, name={self.name})>"
