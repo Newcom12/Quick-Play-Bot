@@ -23,3 +23,23 @@ class User(Base):
 
     def __repr__(self):
         return f"<User(telegram_id={self.telegram_id}, username={self.username})>"
+
+
+class Card(Base):
+    """Модель карты Clash Royale."""
+
+    __tablename__ = "cards"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    image_path = Column(String, nullable=False)
+    image_path_evolution = Column(String, nullable=True)  # Путь к картинке с эволюцией
+    has_evolution = Column(Boolean, default=False, nullable=False)
+    group = Column(String, nullable=False)  # Spells, Melee, Ranged и т.д.
+    elixir_cost = Column(Integer, nullable=False)
+    rarity = Column(String, nullable=True)  # Common, Rare, Epic, Legendary, Champion
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<Card(name={self.name}, elixir={self.elixir_cost}, has_evolution={self.has_evolution})>"

@@ -22,7 +22,9 @@ QuickPlayBot/
 │   │   └── start.py       # Обработчик команды /start
 │   └── utils/             # Утилиты
 │       ├── __init__.py
-│       └── logger.py      # Настройка loguru
+│       ├── logger.py      # Настройка loguru
+│       ├── card_parser.py # Парсер карт Clash Royale
+│       └── download_cards.py # Скрипт скачивания карт
 ├── .env                   # Переменные окружения
 ├── .gitignore
 ├── pyproject.toml         # Зависимости проекта
@@ -175,6 +177,141 @@ class YourModel(Base):
 - `.env` файл добавлен в `.gitignore`
 - Токен бота хранится только в переменных окружения
 - База данных хранится локально
+
+## 🃏 Работа с картами Clash Royale
+
+### Скачивание карт
+
+Для скачивания всех карт Clash Royale с сайта deckshop.pro используйте скрипт:
+
+```bash
+poetry run python -m app.utils.download_cards
+```
+
+или
+
+```bash
+cd app/utils && poetry run python download_cards.py
+```
+
+**Что делает скрипт:**
+1. Парсит сайт https://www.deckshop.pro/card/list для получения URL изображений
+2. Скачивает изображения всех 121 карт в папку `app/data/cards/`
+3. Для карт с эволюцией (39 штук) скачивает два варианта:
+   - Обычная карта: `{card_name}.png`
+   - Карта с эволюцией: `{card_name}_evolution.png`
+4. Создает JSON базу данных `app/data/cards/cards_database.json` с **160 записями** (121 обычных + 39 эволюций)
+
+**Доскачивание недостающих карт:**
+
+Если некоторые карты не скачались, используйте отдельный скрипт:
+
+```bash
+poetry run python -m app.utils.download_missing_cards
+```
+
+Этот скрипт пытается скачать только те карты, которые не удалось скачать при основном запуске.
+
+**Структура JSON базы данных:**
+
+Для карт **БЕЗ эволюции** (82 карты):
+```json
+{
+  "name": "Goblins",
+  "image_path": "app/data/cards/Goblins.png",
+  "has_evolution": false,
+  "group": "Melee",
+  "elixir_cost": 2,
+  "rarity": "Common"
+}
+```
+
+Для карт **С эволюцией** создаются **ДВЕ отдельные записи**:
+
+1. **Обычная версия** (в обычной группе):
+```json
+{
+  "name": "Skeletons",
+  "image_path": "app/data/cards/Skeletons.png",
+  "has_evolution": false,
+  "group": "Melee",
+  "elixir_cost": 1,
+  "rarity": "Common"
+}
+```
+
+2. **Версия с эволюцией** (в группе "With evolutions"):
+```json
+{
+  "name": "Skeletons_evolution",
+  "image_path": "app/data/cards/Skeletons_evolution.png",
+  "has_evolution": true,
+  "group": "With evolutions",
+  "elixir_cost": 1,
+  "rarity": "Common"
+}
+```
+
+### Структура данных карт
+
+Каждая карта содержит:
+- `name` - Название карты (для эволюций: `{card_name}_evolution`)
+- `image_path` - Путь к изображению карты
+- `has_evolution` - Флаг наличия эволюции (True для эволюций, False для обычных версий)
+- `group` - Группа карты
+- `elixir_cost` - Стоимость в эликсире (1-9)
+- `rarity` - Редкость (Common, Rare, Epic, Legendary, Champion)
+
+### Особенности работы с картами
+
+- **Всего карт:** 121 обычная карта + 39 эволюций = **160 записей в JSON**
+
+- **39 карт с эволюцией** сохраняются как **ДВЕ отдельные записи**:
+  - **Обычная версия** (has_evolution=False):
+    - Имя: `{card_name}` (например, "Skeletons")
+    - Файл: `{card_name}.png`
+    - Группа: обычная группа (Melee, Ranged, Spells и т.д.)
+  - **Версия с эволюцией** (has_evolution=True):
+    - Имя: `{card_name}_evolution` (например, "Skeletons_evolution")
+    - Файл: `{card_name}_evolution.png`
+    - Группа: **"With evolutions"** (специальная группа)
+  
+- **Группы карт:**
+  - **With evolutions** - все 39 карт с эволюцией (только версии с эволюцией)
+  - Spells (Заклинания)
+  - Melee (Ближний бой)
+  - Ranged (Дальний бой)
+  - Buildings (Здания)
+  - Air units (Воздушные юниты)
+  - Ground units (Наземные юниты)
+
+- **Редкость карт:**
+  - Common (Обычная)
+  - Rare (Редкая)
+  - Epic (Эпическая)
+  - Legendary (Легендарная)
+  - Champion (Чемпион)
+
+- **Формат изображений:** Все изображения сохраняются в формате PNG для максимального качества
+
+- **Примечания:**
+  - Если парсинг сайта не удался, скрипт использует предопределенный список карт
+  - Изображения скачиваются в полном размере, если доступны
+  - Все ошибки логируются в `app/data/logs/bot.log`
+
+### Модель Card в базе данных
+
+**Модель Card:**
+- `id` - Первичный ключ
+- `name` - Название карты (уникальное)
+- `image_path` - Путь к изображению обычной карты
+- `image_path_evolution` - Путь к изображению с эволюцией
+- `has_evolution` - Флаг наличия эволюции
+- `group` - Группа карты
+- `elixir_cost` - Стоимость в эликсире
+- `rarity` - Редкость карты
+- `created_at` - Дата создания записи
+- `updated_at` - Дата последнего обновления
 
 ## 📄 Лицензия
 
