@@ -3,9 +3,10 @@
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import SessionLocal
+from app.database import get_db
 from app.models import User
 from app.utils.logger import logger
 
@@ -16,34 +17,37 @@ router = Router()
 async def cmd_start(message: Message):
     """Обработка команды /start с красивым HTML форматированием."""
     user = message.from_user
-    db: Session = next(SessionLocal())
 
-    try:
-        # Проверка существования пользователя в БД
-        db_user = db.query(User).filter(User.telegram_id == user.id).first()
-
-        if not db_user:
-            # Создание нового пользователя
-            db_user = User(
-                telegram_id=user.id,
-                username=user.username,
-                first_name=user.first_name,
-                last_name=user.last_name,
+    async for db in get_db():
+        try:
+            # Проверка существования пользователя в БД
+            result = await db.execute(
+                select(User).where(User.telegram_id == user.id)
             )
-            db.add(db_user)
-            db.commit()
-            db.refresh(db_user)
-            logger.info(f"Новый пользователь зарегистрирован: {user.id} (@{user.username})")
-        else:
-            # Обновление информации о пользователе
-            db_user.username = user.username
-            db_user.first_name = user.first_name
-            db_user.last_name = user.last_name
-            db.commit()
-            logger.info(f"Информация о пользователе обновлена: {user.id}")
+            db_user = result.scalar_one_or_none()
 
-        # Красивое приветственное сообщение с HTML форматированием
-        welcome_text = f"""
+            if not db_user:
+                # Создание нового пользователя
+                db_user = User(
+                    telegram_id=user.id,
+                    username=user.username,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                )
+                db.add(db_user)
+                await db.commit()
+                await db.refresh(db_user)
+                logger.info(f"Новый пользователь зарегистрирован: {user.id} (@{user.username})")
+            else:
+                # Обновление информации о пользователе
+                db_user.username = user.username
+                db_user.first_name = user.first_name
+                db_user.last_name = user.last_name
+                await db.commit()
+                logger.info(f"Информация о пользователе обновлена: {user.id}")
+
+            # Красивое приветственное сообщение с HTML форматированием
+            welcome_text = f"""
 <b>👋 Добро пожаловать, {user.first_name}!</b>
 
 <i>Я QuickPlayBot - ваш помощник для быстрой игры!</i>
@@ -62,14 +66,13 @@ async def cmd_start(message: Message):
 Используйте команды выше или просто отправьте сообщение!
 
 <i>Приятного использования! 🎉</i>
-        """.strip()
+            """.strip()
 
-        await message.answer(welcome_text)
+            await message.answer(welcome_text)
 
-    except Exception as e:
-        logger.error(f"Ошибка при обработке /start: {e}")
-        await message.answer(
-            "❌ Произошла ошибка при обработке команды. Попробуйте позже."
-        )
-    finally:
-        db.close()
+        except Exception as e:
+            logger.error(f"Ошибка при обработке /start: {e}")
+            await message.answer(
+                "❌ Произошла ошибка при обработке команды. Попробуйте позже."
+            )
+        break

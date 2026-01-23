@@ -13,7 +13,7 @@ async def main():
     try:
         # Инициализация базы данных
         logger.info("Инициализация базы данных...")
-        init_db()
+        await init_db()
         logger.info("База данных успешно инициализирована")
 
         # Регистрация роутеров
@@ -23,7 +23,7 @@ async def main():
 
         # Запуск бота
         await on_startup()
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), drop_pending_updates=False)
 
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")

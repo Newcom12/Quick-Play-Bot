@@ -10,11 +10,11 @@ class Settings(BaseSettings):
     BOT_TOKEN: str
 
     # Database
-    DATABASE_URL: str = "sqlite:///./bot.db"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./app/data/bot.db"
 
     # Logging
     LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "logs/bot.log"
+    LOG_FILE: str = "app/data/logs/bot.log"
     LOG_ROTATION: str = "10 MB"
     LOG_RETENTION: str = "7 days"
 
