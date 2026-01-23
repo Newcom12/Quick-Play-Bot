@@ -1,0 +1,1 @@
+"""QuickPlayBot application package."""
