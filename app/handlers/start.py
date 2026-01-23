@@ -117,13 +117,13 @@ async def cmd_start(message: Message):
     )
     
     # Затем отправляем основное меню с inline кнопками
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎮 Играть в Шпиона", callback_data="start_spy_game")],
-                [InlineKeyboardButton(text="👥 Управление игроками", callback_data="manage_players")],
-                [InlineKeyboardButton(text="📖 Правила", callback_data="show_rules")],
-                [InlineKeyboardButton(text="📊 Статистика", callback_data="show_stats")],
-                [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="show_help")]
-            ])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎮 Играть в Шпиона", callback_data="start_spy_game")],
+        [InlineKeyboardButton(text="👥 Управление игроками", callback_data="manage_players")],
+        [InlineKeyboardButton(text="📖 Правила", callback_data="show_rules")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="show_stats")],
+        [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="show_help")]
+    ])
     
     welcome_message = (
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"

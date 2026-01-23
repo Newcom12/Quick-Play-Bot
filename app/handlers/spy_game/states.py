@@ -11,6 +11,7 @@ class SpyGameStates(StatesGroup):
     waiting_for_players_count = State()  # Ожидание количества игроков
     waiting_for_spies_count = State()    # Ожидание количества шпионов
     selecting_players = State()          # Выбор игроков из сохраненных
+    waiting_for_player_name_in_game = State()  # Ожидание ввода имени игрока во время игры
     managing_players = State()           # Управление списком игроков (добавление имен) - устарело
     waiting_for_player_name = State()    # Ожидание ввода имени игрока - устарело
     showing_cards = State()              # Показ карт игрокам

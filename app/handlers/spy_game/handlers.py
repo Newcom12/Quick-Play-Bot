@@ -225,7 +225,12 @@ async def handle_confirm_players_selection(callback: CallbackQuery, state: FSMCo
         break
     
     players_count = len(selected_names)
-    await state.update_data(players_count=players_count, selected_player_names=selected_names)
+    # Сохраняем выбранных игроков и количество
+    await state.update_data(
+        players_count=players_count, 
+        selected_player_names=selected_names,
+        selected_players=selected_players  # Сохраняем также ID для возможного обновления
+    )
     await state.set_state(SpyGameStates.waiting_for_spies_count)
     
     # Разрешаем выбрать от 1 до players_count (включительно)
@@ -243,7 +248,7 @@ async def handle_confirm_players_selection(callback: CallbackQuery, state: FSMCo
 @router.callback_query(F.data == "add_new_player_in_game", StateFilter(SpyGameStates.selecting_players))
 async def handle_add_new_player_in_game(callback: CallbackQuery, state: FSMContext):
     """Добавляет нового игрока прямо во время выбора."""
-    await state.set_state("waiting_for_player_name_in_game")
+    await state.set_state(SpyGameStates.waiting_for_player_name_in_game)
     await callback.message.edit_text(
         "➕ <b>Добавление игрока</b>\n\n"
         "Введите имя нового игрока:"
@@ -251,7 +256,7 @@ async def handle_add_new_player_in_game(callback: CallbackQuery, state: FSMConte
     await callback.answer()
 
 
-@router.message(F.text, lambda m, state: state.get_state() == "waiting_for_player_name_in_game")
+@router.message(F.text, StateFilter(SpyGameStates.waiting_for_player_name_in_game))
 async def handle_player_name_input_in_game(message: Message, state: FSMContext):
     """Обрабатывает ввод имени игрока во время игры."""
     player_name = message.text.strip()
@@ -326,16 +331,38 @@ async def set_players_count(callback: CallbackQuery, state: FSMContext):
     players_count = int(callback.data.split(":")[1])
     
     await state.update_data(players_count=players_count)
-    await state.set_state(SpyGameStates.waiting_for_spies_count)
     
-    # Разрешаем выбрать от 1 до players_count (включительно) - можно выбрать всех как шпионов
-    keyboard = create_number_keyboard(1, players_count, "spies_count", add_random=True)
+    # Проверяем, есть ли сохраненные игроки
+    user_id = callback.from_user.id
+    saved_players = []
+    async for db in get_db():
+        try:
+            from app.models import SavedPlayer
+            result = await db.execute(
+                select(SavedPlayer).where(SavedPlayer.user_id == user_id).order_by(SavedPlayer.created_at)
+            )
+            saved_players = result.scalars().all()
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке сохраненных игроков: {e}", exc_info=True)
+        break
     
-    await callback.message.edit_text(
-        f"✅ Игроков: <b>{players_count}</b>\n\n"
-        "🕵️ Выберите количество шпионов:",
-        reply_markup=keyboard
-    )
+    if saved_players:
+        # Есть сохраненные игроки - переходим к выбору
+        await state.set_state(SpyGameStates.selecting_players)
+        await state.update_data(selected_players=[])  # Список выбранных игроков
+        
+        await show_players_selection(callback.message, state, saved_players)
+    else:
+        # Нет сохраненных игроков - переходим к выбору количества шпионов (старая логика)
+        await state.set_state(SpyGameStates.waiting_for_spies_count)
+        keyboard = create_number_keyboard(1, players_count, "spies_count", add_random=True)
+        
+        await callback.message.edit_text(
+            f"✅ Игроков: <b>{players_count}</b>\n\n"
+            "🕵️ Выберите количество шпионов:",
+            reply_markup=keyboard
+        )
+    
     await callback.answer()
 
 
@@ -369,13 +396,103 @@ async def set_spies_count(callback: CallbackQuery, state: FSMContext):
     
     await state.update_data(spies_count=spies_count)
     
-    # Переходим к управлению игроками
-    await state.set_state(SpyGameStates.managing_players)
-    await state.update_data(players_list=[])  # Список игроков с именами
+    # Проверяем, есть ли уже выбранные игроки
+    data = await state.get_data()
+    selected_player_names = data.get("selected_player_names", [])
     
-    # Показываем меню управления игроками
-    await show_players_management(callback.message, state, players_count)
+    logger.info(f"После выбора шпионов: players_count={players_count}, selected_player_names={selected_player_names}")
+    
+    if selected_player_names and len(selected_player_names) >= 3:
+        # Игроки уже выбраны - сразу переходим к настройке игры
+        # Используем выбранных игроков (берем столько, сколько нужно)
+        actual_players_count = len(selected_player_names)
+        if actual_players_count != players_count:
+            # Обновляем количество игроков на фактическое
+            players_count = actual_players_count
+            await state.update_data(players_count=players_count)
+            logger.info(f"Обновлено количество игроков: {players_count}")
+        
+        players_list = [{"name": name, "index": i} for i, name in enumerate(selected_player_names)]
+        logger.info(f"Используем выбранных игроков: {[p['name'] for p in players_list]}")
+        
+        # Загружаем карты и настраиваем игру
+        await setup_game_with_players(callback.message, state, players_list, spies_count)
+    else:
+        # Игроки не выбраны - переходим к старому меню управления игроками (для обратной совместимости)
+        logger.info(f"Игроки не выбраны, переходим к меню управления. selected_player_names={selected_player_names}")
+        await state.set_state(SpyGameStates.managing_players)
+        await state.update_data(players_list=[])  # Список игроков с именами
+        
+        # Показываем меню управления игроками
+        await show_players_management(callback.message, state, players_count)
+    
     await callback.answer()
+
+
+async def setup_game_with_players(message, state: FSMContext, players_list: list, spies_count: int):
+    """Настраивает игру с уже выбранными игроками."""
+    data = await state.get_data()
+    game_type = data.get("game_type", "clash_royale")
+    use_evolutions = data.get("use_evolutions", False)
+    
+    # Загружаем карты из базы данных
+    cards_list = []
+    async for db in get_db():
+        try:
+            if game_type == "clash_royale":
+                result = await db.execute(select(ClashRoyaleCard))
+                all_cards = result.scalars().all()
+                
+                logger.info(f"Всего карт в БД: {len(all_cards)}")
+                
+                cards_list = [
+                    {
+                        "name": card.name,
+                        "file_id": card.file_id,
+                        "file_id_evolution": card.file_id_evolution,
+                        "has_evolution": card.has_evolution
+                    }
+                    for card in all_cards 
+                    if card.file_id and card.file_id.strip()
+                ]
+                
+                logger.info(f"Карт с file_id: {len(cards_list)}")
+                
+                if not cards_list and all_cards:
+                    logger.warning(
+                        f"В БД есть {len(all_cards)} карт, но ни у одной нет file_id. "
+                        f"Возможно, нужно загрузить file_id через upload_cards_to_bot."
+                    )
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке карт из БД: {e}", exc_info=True)
+        break
+    
+    if not cards_list:
+        await message.answer(
+            "❌ Карты не найдены в базе данных. Пожалуйста, сначала загрузите карты."
+        )
+        await state.clear()
+        return
+    
+    # Настраиваем игру
+    game = game_manager.setup_game(
+        message.from_user.id,
+        players_list,
+        spies_count,
+        cards_list,
+        use_evolutions=use_evolutions
+    )
+    
+    if not game:
+        await message.answer("❌ Ошибка при создании игры")
+        await state.clear()
+        return
+    
+    await state.set_state(SpyGameStates.showing_cards)
+    await state.update_data(current_player_index=0)
+    
+    # Показываем карту первому игроку
+    await show_player_card(message, state, game)
 
 
 async def show_players_management(message, state: FSMContext, players_count: int):

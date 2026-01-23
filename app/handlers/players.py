@@ -1,8 +1,9 @@
 """Обработчик управления игроками."""
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.database import get_db
@@ -12,6 +13,11 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = Router()
+
+
+class PlayerManagementStates(StatesGroup):
+    """Состояния управления игроками."""
+    waiting_for_player_name = State()
 
 
 @router.callback_query(F.data == "manage_players")
@@ -66,7 +72,7 @@ async def cmd_players(message: Message):
 @router.callback_query(F.data == "add_saved_player")
 async def add_saved_player_callback(callback: CallbackQuery, state: FSMContext):
     """Обработчик добавления игрока."""
-    await state.set_state("waiting_for_player_name")
+    await state.set_state(PlayerManagementStates.waiting_for_player_name)
     await callback.message.edit_text(
         "➕ <b>Добавление игрока</b>\n\n"
         "Введите имя игрока:"
@@ -74,7 +80,7 @@ async def add_saved_player_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(F.text, lambda m, state: state.get_state() == "waiting_for_player_name")
+@router.message(F.text, StateFilter(PlayerManagementStates.waiting_for_player_name))
 async def handle_player_name_input(message: Message, state: FSMContext):
     """Обрабатывает ввод имени игрока."""
     player_name = message.text.strip()
