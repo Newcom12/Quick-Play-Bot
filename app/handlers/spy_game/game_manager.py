@@ -16,6 +16,8 @@ class Player:
     is_spy: bool
     card_name: Optional[str] = None
     file_id: Optional[str] = None
+    file_id_evolution: Optional[str] = None
+    has_evolution: bool = False
     has_seen_card: bool = False
 
 
@@ -33,6 +35,8 @@ class Game:
     timer_chat_id: Optional[int] = None
     is_active: bool = False
     votes: Dict[int, int] = field(default_factory=dict)  # user_id -> voted_for_user_id
+    game_theme: Optional[str] = None  # Тема игры (название карты для обычных игроков)
+    timer_expired: bool = False  # Истек ли таймер
     
     def get_current_player(self) -> Optional[Player]:
         """Возвращает текущего игрока."""
@@ -125,13 +129,13 @@ class GameManager:
             del self.games[user_id]
             logger.info(f"Игра остановлена для пользователя {user_id}")
     
-    def setup_game(self, user_id: int, players_count: int, spies_count: int, cards: List[Dict]) -> Game:
+    def setup_game(self, user_id: int, players_list: List[Dict], spies_count: int, cards: List[Dict], use_evolutions: bool = False) -> Game:
         """
         Настраивает игру с игроками и картами.
         
         Args:
             user_id: ID создателя игры
-            players_count: Количество игроков
+            players_list: Список игроков с именами [{"name": "Имя", "index": 0}, ...]
             spies_count: Количество шпионов
             cards: Список карт из базы данных
         """
@@ -139,6 +143,7 @@ class GameManager:
         if not game:
             return None
         
+        players_count = len(players_list)
         game.players_count = players_count
         game.spies_count = spies_count
         
@@ -151,43 +156,88 @@ class GameManager:
         # Если все игроки - шпионы, не нужно выбирать карты
         if spies_count == players_count:
             # Все игроки - шпионы
-            for i in range(players_count):
+            for player_data in players_list:
                 player = Player(
                     user_id=user_id,
-                    username=f"Игрок {i + 1}",
+                    username=player_data['name'],
                     is_spy=True
                 )
                 players.append(player)
         else:
             # Есть обычные игроки - выбираем карты для них
-            regular_cards = random.sample(cards, min(len(cards), players_count - spies_count))
+            # Выбираем одну карту как тему игры
+            theme_card = random.choice(cards)
+            game.game_theme = theme_card['name']
+            
+            # Определяем, использовать ли эволюцию для темы
+            # Если use_evolutions=True и у карты есть эволюция, используем её
+            use_evolution_for_theme = False
+            if use_evolutions:
+                if theme_card.get('has_evolution') and theme_card.get('file_id_evolution'):
+                    use_evolution_for_theme = True
+            
+            regular_cards = [theme_card] * (players_count - spies_count)  # Все обычные игроки получают одну карту
             card_index = 0
             
-            for i in range(players_count):
+            for i, player_data in enumerate(players_list):
                 is_spy = i in spy_indices
                 
                 if is_spy:
                     player = Player(
                         user_id=user_id,  # Все играют на одном телефоне
-                        username=f"Игрок {i + 1}",
+                        username=player_data['name'],
                         is_spy=True
                     )
                 else:
                     card = regular_cards[card_index % len(regular_cards)]
+                    # Если используем эволюции и у карты есть эволюция, добавляем её
+                    file_id_evolution = None
+                    has_evolution = False
+                    if use_evolution_for_theme and card.get('has_evolution') and card.get('file_id_evolution'):
+                        file_id_evolution = card.get('file_id_evolution')
+                        has_evolution = True
+                    
                     player = Player(
                         user_id=user_id,
-                        username=f"Игрок {i + 1}",
+                        username=player_data['name'],
                         is_spy=False,
                         card_name=card['name'],
-                        file_id=card['file_id']
+                        file_id=card.get('file_id'),
+                        file_id_evolution=file_id_evolution,
+                        has_evolution=has_evolution
                     )
                     card_index += 1
                 
                 players.append(player)
         
         game.players = players
-        logger.info(f"Игра настроена: {players_count} игроков, {spies_count} шпионов")
+        logger.info(f"Игра настроена: {players_count} игроков, {spies_count} шпионов, тема: {game.game_theme}")
         return game
+    
+    def check_guess(self, user_id: int, guessed_theme: str) -> tuple[bool, Optional[str]]:
+        """
+        Проверяет угадывание темы игры шпионом.
+        
+        Returns:
+            (is_correct, winner_name) - правильно ли угадано, имя победителя (если угадал)
+        """
+        game = self.get_game(user_id)
+        if not game or not game.game_theme:
+            return False, None
+        
+        # Нормализуем сравнение (без учета регистра и пробелов)
+        guessed_normalized = guessed_theme.lower().strip()
+        theme_normalized = game.game_theme.lower().strip()
+        
+        is_correct = guessed_normalized == theme_normalized
+        
+        if is_correct:
+            # Находим игрока-шпиона, который угадал
+            for player in game.players:
+                if player.is_spy and player.user_id == user_id:
+                    return True, player.username
+        
+        return False, None
 
 
 # Глобальный менеджер игр

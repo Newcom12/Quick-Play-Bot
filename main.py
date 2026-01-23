@@ -30,6 +30,8 @@ async def main():
         dp.include_router(start.router)
         dp.include_router(help.router)
         dp.include_router(rules.router)
+        from app.handlers import stats
+        dp.include_router(stats.router)
         dp.include_router(spy_game_handlers.router)
         logger.info("Роутеры успешно зарегистрированы")
 

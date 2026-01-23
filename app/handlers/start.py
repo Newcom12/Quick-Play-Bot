@@ -120,6 +120,7 @@ async def cmd_start(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎮 Играть в Шпиона", callback_data="start_spy_game")],
         [InlineKeyboardButton(text="📖 Правила", callback_data="show_rules")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="show_stats")],
         [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="show_help")]
     ])
     

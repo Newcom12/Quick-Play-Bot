@@ -38,6 +38,7 @@ async def set_bot_commands():
         BotCommand(command="help", description="ℹ️ Получить помощь"),
         BotCommand(command="spy", description="🎮 Играть в Шпиона"),
         BotCommand(command="rules", description="📖 Правила игры"),
+        BotCommand(command="stats", description="📊 Статистика игроков"),
     ]
     await bot.set_my_commands(commands)
     logger.info("Команды бота успешно зарегистрированы")
