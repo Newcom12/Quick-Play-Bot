@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Card
+from app.models import ClashRoyaleCard
 from app.utils.logger import logger
 
 
@@ -51,13 +51,12 @@ async def load_cards_to_database():
             for idx, (card_name, card_data) in enumerate(regular_cards.items(), 1):
                 # Проверяем, существует ли карта в базе
                 result = await db.execute(
-                    select(Card).where(Card.name == card_name)
+                    select(ClashRoyaleCard).where(ClashRoyaleCard.name == card_name)
                 )
                 existing_card = result.scalar_one_or_none()
                 
                 if existing_card:
                     # Обновляем существующую карту
-                    existing_card.image_path = card_data.get('image_path', '')
                     existing_card.file_id = card_data.get('file_id')
                     existing_card.group = card_data.get('group', 'Unknown')
                     existing_card.elixir_cost = card_data.get('elixir_cost', 0)
@@ -66,7 +65,6 @@ async def load_cards_to_database():
                     # Если есть эволюция для этой карты, обновляем данные эволюции
                     if card_name in evolution_cards:
                         evo_data = evolution_cards[card_name]
-                        existing_card.image_path_evolution = evo_data.get('image_path', '')
                         existing_card.file_id_evolution = evo_data.get('file_id')
                         existing_card.has_evolution = True
                     else:
@@ -77,9 +75,8 @@ async def load_cards_to_database():
                         logger.info(f"[{idx}/{len(regular_cards)}] Обновлено карт...")
                 else:
                     # Создаем новую карту
-                    new_card = Card(
+                    new_card = ClashRoyaleCard(
                         name=card_name,
-                        image_path=card_data.get('image_path', ''),
                         file_id=card_data.get('file_id'),
                         has_evolution=card_name in evolution_cards,
                         group=card_data.get('group', 'Unknown'),
@@ -90,7 +87,6 @@ async def load_cards_to_database():
                     # Если есть эволюция, добавляем данные эволюции
                     if card_name in evolution_cards:
                         evo_data = evolution_cards[card_name]
-                        new_card.image_path_evolution = evo_data.get('image_path', '')
                         new_card.file_id_evolution = evo_data.get('file_id')
                     
                     db.add(new_card)

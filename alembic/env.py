@@ -12,7 +12,7 @@ from alembic import context
 # Импорт настроек и моделей
 from app.config import settings
 from app.database import Base
-from app.models import User, Card  # noqa: F401
+from app.models import User, ClashRoyaleCard, SpyCard  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     LOG_FILE: str = "app/data/logs/bot.log"
     LOG_ROTATION: str = "10 MB"
     LOG_RETENTION: str = "7 days"
+    
+    # Game settings
+    CHANNEL_ID: str = ""  # ID канала для проверки подписки (например: "@channel" или "-1001234567890")
+    GAME_TIMER_DURATION: int = 150  # Длительность игры в секундах (по умолчанию 2.5 минуты)
 
     model_config = SettingsConfigDict(
         env_file=".env",

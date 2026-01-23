@@ -25,16 +25,14 @@ class User(Base):
         return f"<User(telegram_id={self.telegram_id}, username={self.username})>"
 
 
-class Card(Base):
+class ClashRoyaleCard(Base):
     """Модель карты Clash Royale."""
 
-    __tablename__ = "cards"
+    __tablename__ = "clash_royale_cards"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    image_path = Column(String, nullable=False)
     file_id = Column(String, nullable=True)  # Telegram file_id для изображения
-    image_path_evolution = Column(String, nullable=True)  # Путь к картинке с эволюцией
     file_id_evolution = Column(String, nullable=True)  # Telegram file_id для изображения эволюции
     has_evolution = Column(Boolean, default=False, nullable=False)
     group = Column(String, nullable=False)  # Spells, Melee, Ranged и т.д.
@@ -44,4 +42,21 @@ class Card(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     def __repr__(self):
-        return f"<Card(name={self.name}, elixir={self.elixir_cost}, has_evolution={self.has_evolution})>"
+        return f"<ClashRoyaleCard(name={self.name}, elixir={self.elixir_cost}, has_evolution={self.has_evolution})>"
+
+
+class SpyCard(Base):
+    """Модель карты для игры в шпиона (универсальная для разных игр)."""
+
+    __tablename__ = "spy_cards"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    file_id = Column(String, nullable=True)  # Telegram file_id для изображения
+    game_name = Column(String, nullable=True)  # Название игры (например, "Clash Royale", "Brawl Stars" и т.д.)
+    description = Column(String, nullable=True)  # Описание карты
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<SpyCard(name={self.name}, game={self.game_name})>"

@@ -1,29 +1,54 @@
 """Обработчик команды /help."""
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 router = Router()
 
 
+@router.callback_query(F.data == "show_help")
+async def show_help_callback(callback: CallbackQuery):
+    """Обработчик кнопки помощи."""
+    await cmd_help(callback.message)
+    await callback.answer()
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    """Обработка команды /help с информацией о боте."""
-    help_text = """
-<b>ℹ️ Справка по использованию бота</b>
+    """Обработчик команды /help."""
+    help_text = (
+        "📖 <b>Помощь по боту</b>\n\n"
+        "🎮 <b>Игра Шпион</b>\n"
+        "Игра для компании на одном телефоне!\n\n"
+        "📋 <b>Как играть:</b>\n"
+        "1. Нажмите 'Играть в Шпиона'\n"
+        "2. Выберите количество игроков (3-10)\n"
+        "3. Выберите количество шпионов\n"
+        "4. По очереди открывайте карты\n"
+        "5. Обсуждайте и ищите шпионов!\n\n"
+        "⏱️ <b>Таймер:</b> 2.5 минуты (настраивается)\n\n"
+        "🗳️ <b>Голосование:</b>\n"
+        "Голосуйте за того, кого считаете шпионом.\n\n"
+        "🎯 <b>Правила победы:</b>\n"
+        "• Игроки выигрывают, если найдут всех шпионов\n"
+        "• Шпионы выигрывают, если их осталось больше или равно обычным игрокам\n\n"
+        "📝 <b>Команды:</b>\n"
+        "/start - Главное меню\n"
+        "/spy - Начать игру Шпион\n"
+        "/help - Эта справка"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_start")]
+    ])
+    
+    await message.answer(help_text, reply_markup=keyboard)
 
-<b>📋 Доступные команды:</b>
-/start - Начать работу с ботом
-/help - Показать эту справку
 
-<b>💡 Как использовать:</b>
-Просто отправьте одну из команд выше, и бот ответит вам!
-
-<b>❓ Нужна помощь?</b>
-Если у вас возникли вопросы или проблемы, обратитесь к администратору бота.
-
-<i>Приятного использования! 🎉</i>
-    """.strip()
-
-    await message.answer(help_text)
+@router.callback_query(F.data == "back_to_start")
+async def back_to_start(callback: CallbackQuery):
+    """Возврат в главное меню."""
+    from app.handlers.start import cmd_start
+    await cmd_start(callback.message)
+    await callback.answer()

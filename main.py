@@ -5,6 +5,9 @@ import asyncio
 from app.bot import bot, dp, on_startup, on_shutdown
 from app.database import init_db
 from app.handlers import start, help
+from app.handlers.spy_game import handlers as spy_game_handlers
+from app.middleware.channel_subscription import ChannelSubscriptionMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.utils.logger import logger
 
 
@@ -16,9 +19,16 @@ async def main():
         await init_db()
         logger.info("База данных успешно инициализирована")
 
+        # Регистрация middleware
+        dp.message.middleware(RateLimitMiddleware(rate_limit=0.5))
+        dp.callback_query.middleware(RateLimitMiddleware(rate_limit=0.5))
+        dp.message.middleware(ChannelSubscriptionMiddleware())
+        logger.info("Middleware успешно зарегистрированы")
+        
         # Регистрация роутеров
         dp.include_router(start.router)
         dp.include_router(help.router)
+        dp.include_router(spy_game_handlers.router)
         logger.info("Роутеры успешно зарегистрированы")
 
         # Запуск бота
