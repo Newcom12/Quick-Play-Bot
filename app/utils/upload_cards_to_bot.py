@@ -69,9 +69,9 @@ async def upload_cards_to_bot():
     files_to_upload = []
     
     # Создаем словари для быстрого поиска по нормализованным именам
-    cards_in_db_normalized = {}  # normalized_name -> card_name
-    cards_without_file_id_normalized = {}  # normalized_name -> card_name
-    cards_without_evolution_file_id_normalized = {}  # normalized_name -> card_name
+    cards_in_db_normalized = {}  # Нормализованное имя -> имя карты в базе
+    cards_without_file_id_normalized = {}  # Нормализованное имя -> имя карты без file_id
+    cards_without_evolution_file_id_normalized = {}  # Нормализованное имя -> имя карты без file_id_evolution
     
     # Сначала собираем все имена карт из БД и нормализуем их
     async for db in get_db():
@@ -98,7 +98,7 @@ async def upload_cards_to_bot():
     
     for image_path in png_files:
         if image_path.name == "spy.png":
-            # spy.png всегда обрабатываем (проверяем, нужен ли он)
+            # Файл spy.png всегда проверяем отдельно
             async for db in get_db():
                 try:
                     result = await db.execute(select(SpyCard).where(SpyCard.name == "spy"))

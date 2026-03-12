@@ -290,7 +290,7 @@ async def parse_deckshop_site() -> List[Dict]:
                     
                     # Сначала парсим секцию "With evolutions" для получения URL эволюций
                     evolution_section = soup.find('h3', string=re.compile(r'With evolutions', re.I))
-                    evolution_cards_map = {}  # card_name -> evolution_image_url
+                    evolution_cards_map = {}  # Имя карты -> ссылка на изображение эволюции
                     
                     if evolution_section:
                         evolution_container = evolution_section.find_next_sibling()

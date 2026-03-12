@@ -512,7 +512,7 @@ async def setup_game_with_players(message, state: FSMContext, players_list: list
                 # Предупреждение, если карт меньше ожидаемого
                 # ВНИМАНИЕ: Для игры нужны только карты с ОСНОВНЫМ file_id (не file_id_evolution)
                 # Ожидается ~121 карта с основным file_id (все обычные карты)
-                # file_id_evolution используется отдельно только если включены эволюции
+                # Поле file_id_evolution используется отдельно только если включены эволюции
                 if len(cards_list) < 121:
                     logger.warning(
                         f"ВНИМАНИЕ: Ожидается ~121 карта с основным file_id для игры, но найдено только {len(cards_list)}. "
@@ -777,7 +777,7 @@ async def handle_start_game_setup(callback: CallbackQuery, state: FSMContext):
                 # Предупреждение, если карт меньше ожидаемого
                 # ВНИМАНИЕ: Для игры нужны только карты с ОСНОВНЫМ file_id (не file_id_evolution)
                 # Ожидается ~121 карта с основным file_id (все обычные карты)
-                # file_id_evolution используется отдельно только если включены эволюции
+                # Поле file_id_evolution используется отдельно только если включены эволюции
                 if len(cards_list) < 121:
                     logger.warning(
                         f"ВНИМАНИЕ: Ожидается ~121 карта с основным file_id для игры, но найдено только {len(cards_list)}. "
@@ -1082,6 +1082,8 @@ async def start_game(message, state: FSMContext, game):
         "Обсудите и найдите шпионов!"
     )
     
+    game.timer_remaining_seconds = duration
+    
     try:
         timer_message = await message.edit_text(text, reply_markup=keyboard)
         game.timer_message_id = timer_message.message_id
@@ -1114,6 +1116,7 @@ async def start_timer(message, state: FSMContext, game):
                 if remaining < 0:
                     remaining = 0
                 
+                game.timer_remaining_seconds = remaining
                 minutes = remaining // 60
                 seconds = remaining % 60
                 
@@ -1249,7 +1252,9 @@ async def handle_timer_end(message, state: FSMContext, game):
             await save_player_stats(player.username, win=True, win_type="timer")
     
     await message.answer(text)
-    game_manager.stop_game(message.from_user.id)
+    data = await state.get_data()
+    creator_id = data.get("creator_id", message.from_user.id)
+    game_manager.stop_game(creator_id)
     await state.clear()
 
 
@@ -1371,35 +1376,122 @@ async def handle_cancel_game(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_voting")
 async def handle_cancel_voting(callback: CallbackQuery, state: FSMContext):
-    """Отменяет голосование."""
+    """Отменяет голосование и возвращает сообщение «Игра началась!» с таймером и кнопками."""
+    game = await get_game_from_state(state, callback.from_user.id)
+    if not game:
+        await state.set_state(SpyGameStates.game_in_progress)
+        await callback.message.edit_text("Голосование отменено")
+        await callback.answer()
+        return
+    
     await state.set_state(SpyGameStates.game_in_progress)
-    await callback.message.edit_text("Голосование отменено")
+    
+    from app.config import settings
+    remaining = game.timer_remaining_seconds
+    if remaining is None:
+        remaining = settings.GAME_TIMER_DURATION
+    minutes = remaining // 60
+    seconds = remaining % 60
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🕵️ Угадать тему", callback_data="guess_theme")],
+        [InlineKeyboardButton(text="🗳️ Голосовать", callback_data="start_voting")],
+        [InlineKeyboardButton(text="⏹️ Остановить игру", callback_data="stop_game")]
+    ])
+    text = (
+        "🎮 <b>Игра началась!</b>\n\n"
+        f"⏱️ <b>Время:</b> {minutes}:{seconds:02d}\n\n"
+        "Обсудите и найдите шпионов!"
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.debug(f"Не удалось восстановить сообщение игры: {e}")
     await callback.answer()
 
 
 @router.callback_query(F.data == "guess_theme", StateFilter(SpyGameStates.game_in_progress))
 async def handle_guess_theme(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает попытку угадать тему игры."""
+    """Показывает список игроков: кто угадывает тему (выбирают игрока, затем он вводит ответ)."""
     game = await get_game_from_state(state, callback.from_user.id)
     if not game:
         await callback.answer("Игра не найдена", show_alert=True)
         return
     
-    # Проверяем, является ли текущий игрок шпионом
-    current_player = None
-    for player in game.players:
-        if player.user_id == callback.from_user.id and player.is_spy:
-            current_player = player
-            break
-    
-    if not current_player:
-        await callback.answer("Только шпионы могут угадывать тему игры", show_alert=True)
+    spies = game.get_spies()
+    if not spies:
+        await callback.answer("В игре не осталось шпионов для угадывания", show_alert=True)
         return
     
+    await state.set_state(SpyGameStates.selecting_guessing_player)
+    # Кнопки: индекс в game.players для каждого шпиона
+    buttons = []
+    for i, player in enumerate(game.players):
+        if player.is_spy:
+            buttons.append([InlineKeyboardButton(
+                text=f"🕵️ {player.username}",
+                callback_data=f"guess_as:{i}"
+            )])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_guess_selection")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await callback.message.edit_text(
+        "🕵️ <b>Угадывание темы</b>\n\n"
+        "Кто угадывает тему? Выберите игрока:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_guess_selection", StateFilter(SpyGameStates.selecting_guessing_player))
+async def handle_cancel_guess_selection(callback: CallbackQuery, state: FSMContext):
+    """Возврат из выбора игрока к сообщению «Игра началась!»."""
+    game = await get_game_from_state(state, callback.from_user.id)
+    await state.set_state(SpyGameStates.game_in_progress)
+    if game and game.timer_chat_id and game.timer_message_id is not None:
+        from app.config import settings
+        remaining = game.timer_remaining_seconds if game.timer_remaining_seconds is not None else settings.GAME_TIMER_DURATION
+        minutes = remaining // 60
+        seconds = remaining % 60
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🕵️ Угадать тему", callback_data="guess_theme")],
+            [InlineKeyboardButton(text="🗳️ Голосовать", callback_data="start_voting")],
+            [InlineKeyboardButton(text="⏹️ Остановить игру", callback_data="stop_game")]
+        ])
+        text = (
+            "🎮 <b>Игра началась!</b>\n\n"
+            f"⏱️ <b>Время:</b> {minutes}:{seconds:02d}\n\n"
+            "Обсудите и найдите шпионов!"
+        )
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except Exception:
+            pass
+    else:
+        await callback.message.edit_text("🎮 Игра идёт. Используйте кнопки меню.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("guess_as:"), StateFilter(SpyGameStates.selecting_guessing_player))
+async def handle_guess_as_player(callback: CallbackQuery, state: FSMContext):
+    """Выбран игрок для угадывания темы — переходим к вводу ответа."""
+    game = await get_game_from_state(state, callback.from_user.id)
+    if not game:
+        await callback.answer("Игра не найдена", show_alert=True)
+        return
+    
+    player_index = int(callback.data.split(":")[1])
+    if player_index < 0 or player_index >= len(game.players) or not game.players[player_index].is_spy:
+        await callback.answer("Некорректный выбор", show_alert=True)
+        return
+    
+    await state.update_data(guessing_player_index=player_index)
     await state.set_state(SpyGameStates.waiting_for_guess)
+    player_name = game.players[player_index].username
+    
     await callback.message.edit_text(
         f"🕵️ <b>Угадывание темы</b>\n\n"
-        f"Игрок: <b>{current_player.username}</b>\n\n"
+        f"Игрок <b>{player_name}</b> угадывает тему.\n\n"
         "Введите название карты (тему игры):"
     )
     await callback.answer()
@@ -1407,7 +1499,7 @@ async def handle_guess_theme(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(SpyGameStates.waiting_for_guess))
 async def handle_guess_input(message: Message, state: FSMContext):
-    """Обрабатывает ввод угадывания темы."""
+    """Обрабатывает ввод угадывания темы выбранным игроком."""
     guessed_theme = message.text.strip()
     
     if not guessed_theme:
@@ -1420,20 +1512,20 @@ async def handle_guess_input(message: Message, state: FSMContext):
         await message.answer("❌ Игра не найдена")
         return
     
-    # Проверяем угадывание
-    is_correct, winner_name = game_manager.check_guess(message.from_user.id, guessed_theme)
-    
-    # Находим игрока-шпиона
-    guessing_player = None
-    for player in game.players:
-        if player.user_id == message.from_user.id and player.is_spy:
-            guessing_player = player
-            break
-    
-    if not guessing_player:
+    data = await state.get_data()
+    player_index = data.get("guessing_player_index")
+    if player_index is None or player_index < 0 or player_index >= len(game.players):
         await state.set_state(SpyGameStates.game_in_progress)
-        await message.answer("❌ Ошибка: вы не являетесь шпионом")
+        await message.answer("❌ Ошибка: выберите игрока заново")
         return
+    
+    guessing_player = game.players[player_index]
+    if not guessing_player.is_spy:
+        await state.set_state(SpyGameStates.game_in_progress)
+        await message.answer("❌ Только шпион может угадывать тему")
+        return
+    
+    is_correct, winner_name = game_manager.check_guess_by_player(game, player_index, guessed_theme)
     
     if is_correct:
         # Шпион угадал - он выигрывает, игра заканчивается

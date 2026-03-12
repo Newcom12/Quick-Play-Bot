@@ -6,20 +6,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Настройки приложения из переменных окружения."""
 
-    # Telegram Bot Token
+    # Токен Telegram-бота
     BOT_TOKEN: str
 
-    # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./app/data/bot.db"
+    # База данных PostgreSQL
+    DATABASE_URL: str = "postgresql+asyncpg://quickplay:quickplay@postgres:5432/quickplaybot"
 
-    # Logging
+    # Редис для машины состояний
+    REDIS_URL: str = "redis://redis:6379/0"
+
+    # Логирование
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "app/data/logs/bot.log"
     LOG_ROTATION: str = "10 MB"
     LOG_RETENTION: str = "7 days"
     
-    # Game settings
-    CHANNEL_ID: str = ""  # ID канала для проверки подписки (например: "@channel" или "-1001234567890")
+    # Настройки игры
+    CHANNEL_ID: str = ""  # Идентификатор канала для проверки подписки (например: "@channel" или "-1001234567890")
     GAME_TIMER_DURATION: int = 150  # Длительность игры в секундах (по умолчанию 2.5 минуты)
 
     model_config = SettingsConfigDict(

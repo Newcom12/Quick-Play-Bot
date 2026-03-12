@@ -34,10 +34,11 @@ class Game:
     timer_message_id: Optional[int] = None
     timer_chat_id: Optional[int] = None
     is_active: bool = False
-    votes: Dict[int, int] = field(default_factory=dict)  # user_id -> voted_for_user_id
+    votes: Dict[int, int] = field(default_factory=dict)  # Идентификатор голосующего -> индекс выбранного игрока
     game_theme: Optional[str] = None  # Тема игры (название карты для обычных игроков)
     timer_expired: bool = False  # Истек ли таймер
-    card_messages_ids: List[int] = field(default_factory=list)  # ID сообщений с картинками для удаления
+    timer_remaining_seconds: Optional[int] = None  # Оставшееся время (для восстановления сообщения при отмене голосования)
+    card_messages_ids: List[int] = field(default_factory=list)  # Идентификаторы сообщений с картинками для удаления
     
     def get_current_player(self) -> Optional[Player]:
         """Возвращает текущего игрока."""
@@ -103,7 +104,7 @@ class GameManager:
     """Менеджер игр."""
     
     def __init__(self):
-        self.games: Dict[int, Game] = {}  # creator_id -> Game
+        self.games: Dict[int, Game] = {}  # Идентификатор создателя игры -> объект игры
     
     def create_game(self, creator_id: int, game_id: str) -> Game:
         """Создает новую игру."""
@@ -241,6 +242,23 @@ class GameManager:
                     return True, player.username
         
         return False, None
+
+    def check_guess_by_player(self, game: "Game", player_index: int, guessed_theme: str) -> tuple[bool, Optional[str]]:
+        """
+        Проверяет угадывание темы игры выбранным игроком-шпионом.
+
+        Returns:
+            (is_correct, winner_name) - правильно ли угадано, имя победителя (если угадал)
+        """
+        if not game or not game.game_theme or player_index < 0 or player_index >= len(game.players):
+            return False, None
+        player = game.players[player_index]
+        if not player.is_spy:
+            return False, None
+        guessed_normalized = guessed_theme.lower().strip()
+        theme_normalized = game.game_theme.lower().strip()
+        is_correct = guessed_normalized == theme_normalized
+        return (True, player.username) if is_correct else (False, None)
 
 
 # Глобальный менеджер игр

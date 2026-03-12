@@ -1,15 +1,9 @@
 """Настройка базы данных через SQLAlchemy (асинхронная)."""
 
-from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
-
-# Создание директории для базы данных
-db_path_str = settings.DATABASE_URL.replace("sqlite+aiosqlite:///./", "")
-db_path = Path(db_path_str)
-db_path.parent.mkdir(parents=True, exist_ok=True)
 
 # Создание асинхронного движка базы данных
 engine = create_async_engine(

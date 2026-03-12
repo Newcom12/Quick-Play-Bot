@@ -32,12 +32,12 @@ class ClashRoyaleCard(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    file_id = Column(String, nullable=True)  # Telegram file_id для изображения
-    file_id_evolution = Column(String, nullable=True)  # Telegram file_id для изображения эволюции
+    file_id = Column(String, nullable=True)  # Идентификатор файла Telegram для изображения
+    file_id_evolution = Column(String, nullable=True)  # Идентификатор файла Telegram для изображения эволюции
     has_evolution = Column(Boolean, default=False, nullable=False)
-    group = Column(String, nullable=False)  # Spells, Melee, Ranged и т.д.
+    group = Column(String, nullable=False)  # Группа карты (заклинания, ближний бой, дальний бой и так далее)
     elixir_cost = Column(Integer, nullable=False)
-    rarity = Column(String, nullable=True)  # Common, Rare, Epic, Legendary, Champion
+    rarity = Column(String, nullable=True)  # Редкость карты (обычная, редкая, эпическая, легендарная, чемпион)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -52,7 +52,7 @@ class SpyCard(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    file_id = Column(String, nullable=True)  # Telegram file_id для изображения
+    file_id = Column(String, nullable=True)  # Идентификатор файла Telegram для изображения
     game_name = Column(String, nullable=True)  # Название игры (например, "Clash Royale", "Brawl Stars" и т.д.)
     description = Column(String, nullable=True)  # Описание карты
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -88,7 +88,7 @@ class SavedPlayer(Base):
     __tablename__ = "saved_players"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True, nullable=False)  # ID пользователя Telegram (владелец списка)
+    user_id = Column(Integer, index=True, nullable=False)  # Идентификатор пользователя Telegram (владелец списка)
     name = Column(String, nullable=False)  # Имя игрока
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

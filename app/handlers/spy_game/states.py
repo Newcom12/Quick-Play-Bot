@@ -16,5 +16,6 @@ class SpyGameStates(StatesGroup):
     waiting_for_player_name = State()    # Ожидание ввода имени игрока - устарело
     showing_cards = State()              # Показ карт игрокам
     game_in_progress = State()           # Игра идет
+    selecting_guessing_player = State()  # Выбор игрока, который угадывает тему
     waiting_for_guess = State()          # Ожидание угадывания темы игры (шпионом)
     voting = State()                     # Голосование

@@ -3,6 +3,7 @@
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand, KeyboardButton, ReplyKeyboardMarkup
 
 from app.config import settings
@@ -15,7 +16,8 @@ bot = Bot(
 )
 
 # Инициализация диспетчера
-dp = Dispatcher()
+storage = RedisStorage.from_url(settings.REDIS_URL)
+dp = Dispatcher(storage=storage)
 
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
@@ -54,5 +56,6 @@ async def on_startup():
 async def on_shutdown():
     """Действия при остановке бота."""
     logger.info("Бот останавливается...")
+    await dp.storage.close()
     await bot.session.close()
     logger.info("Бот успешно остановлен")
