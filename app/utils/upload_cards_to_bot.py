@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from aiogram import Bot
@@ -15,14 +16,45 @@ from app.utils.logger import logger
 from sqlalchemy import select
 
 
+def normalize_name(name: str) -> str:
+    """Нормализует имя для сравнения: убирает пробелы, приводит к нижнему регистру."""
+    return re.sub(r'[\s_\-]+', '', name.lower())
+
+
 async def upload_cards_to_bot():
-    """Отправляет все картинки из папки cards в бота и получает file_id."""
+    """Отправляет все картинки из папки cards в бота и получает file_id.
+    Загружает только те карты, у которых еще нет file_id или file_id_evolution."""
     project_root = Path(__file__).parent.parent.parent
     cards_dir = project_root / "app" / "data" / "cards"
     
     if not cards_dir.exists():
         logger.error(f"Папка cards не найдена: {cards_dir}")
         return
+    
+    # Сначала проверяем, какие карты уже имеют file_id
+    cards_without_file_id = []
+    cards_without_evolution_file_id = []
+    
+    async for db in get_db():
+        try:
+            # Получаем все карты
+            result = await db.execute(select(ClashRoyaleCard))
+            all_cards = result.scalars().all()
+            
+            for card in all_cards:
+                if not card.file_id or not card.file_id.strip():
+                    cards_without_file_id.append(card.name)
+                    logger.info(f"Карта {card.name} не имеет file_id")
+                
+                if card.has_evolution and (not card.file_id_evolution or not card.file_id_evolution.strip()):
+                    cards_without_evolution_file_id.append(card.name)
+                    logger.info(f"Карта {card.name} не имеет file_id_evolution")
+            
+            logger.info(f"Найдено карт без file_id: {len(cards_without_file_id)}")
+            logger.info(f"Найдено карт без file_id_evolution: {len(cards_without_evolution_file_id)}")
+        except Exception as e:
+            logger.error(f"Ошибка при проверке карт в БД: {e}", exc_info=True)
+        break
     
     # Находим все PNG файлы в папке cards
     png_files = list(cards_dir.glob("*.png"))
@@ -31,7 +63,85 @@ async def upload_cards_to_bot():
         logger.error(f"PNG файлы не найдены в папке: {cards_dir}")
         return
     
-    logger.info(f"Найдено {len(png_files)} PNG файлов для загрузки")
+    logger.info(f"Найдено {len(png_files)} PNG файлов в папке")
+    
+    # Фильтруем файлы: загружаем только те, которые нужны
+    files_to_upload = []
+    
+    # Создаем словари для быстрого поиска по нормализованным именам
+    cards_in_db_normalized = {}  # normalized_name -> card_name
+    cards_without_file_id_normalized = {}  # normalized_name -> card_name
+    cards_without_evolution_file_id_normalized = {}  # normalized_name -> card_name
+    
+    # Сначала собираем все имена карт из БД и нормализуем их
+    async for db in get_db():
+        try:
+            result = await db.execute(select(ClashRoyaleCard))
+            all_cards = result.scalars().all()
+            
+            for card in all_cards:
+                normalized = normalize_name(card.name)
+                cards_in_db_normalized[normalized] = card.name
+                
+                if not card.file_id or not card.file_id.strip():
+                    cards_without_file_id_normalized[normalized] = card.name
+                
+                if card.has_evolution and (not card.file_id_evolution or not card.file_id_evolution.strip()):
+                    cards_without_evolution_file_id_normalized[normalized] = card.name
+            
+            logger.info(f"Карт в БД (нормализованных): {len(cards_in_db_normalized)}")
+            logger.info(f"Карт без file_id (нормализованных): {len(cards_without_file_id_normalized)}")
+            logger.info(f"Карт без file_id_evolution (нормализованных): {len(cards_without_evolution_file_id_normalized)}")
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка карт из БД: {e}", exc_info=True)
+        break
+    
+    for image_path in png_files:
+        if image_path.name == "spy.png":
+            # spy.png всегда обрабатываем (проверяем, нужен ли он)
+            async for db in get_db():
+                try:
+                    result = await db.execute(select(SpyCard).where(SpyCard.name == "spy"))
+                    spy_card = result.scalar_one_or_none()
+                    if not spy_card or not spy_card.file_id or not spy_card.file_id.strip():
+                        files_to_upload.append(image_path)
+                        logger.info("Будет загружен spy.png")
+                    else:
+                        logger.info("spy.png уже имеет file_id, пропускаем")
+                except Exception as e:
+                    logger.error(f"Ошибка при проверке spy.png: {e}", exc_info=True)
+                break
+            continue
+        
+        card_name = image_path.stem  # Имя файла без расширения
+        is_evolution = card_name.endswith("_evolution")
+        base_name = card_name.replace("_evolution", "") if is_evolution else card_name
+        
+        # Нормализуем имя файла для сравнения
+        normalized_base_name = normalize_name(base_name)
+        
+        if is_evolution:
+            # Если это эволюция и карта не имеет file_id_evolution
+            if normalized_base_name in cards_without_evolution_file_id_normalized:
+                files_to_upload.append(image_path)
+                db_card_name = cards_without_evolution_file_id_normalized[normalized_base_name]
+                logger.info(f"Будет загружена эволюция: {card_name} (для карты '{db_card_name}' из БД, файл: '{base_name}')")
+            else:
+                logger.debug(f"Эволюция {card_name} (нормализовано: {normalized_base_name}) уже имеет file_id_evolution, пропускаем")
+        else:
+            # Если это обычная карта и она не имеет file_id
+            if normalized_base_name in cards_without_file_id_normalized:
+                files_to_upload.append(image_path)
+                db_card_name = cards_without_file_id_normalized[normalized_base_name]
+                logger.info(f"Будет загружена карта: {card_name} (в БД: '{db_card_name}')")
+            elif normalized_base_name not in cards_in_db_normalized:
+                # Карты нет в БД - тоже загружаем (она будет создана)
+                files_to_upload.append(image_path)
+                logger.info(f"Карта {card_name} (нормализовано: {normalized_base_name}) не найдена в БД, будет загружена и создана")
+            else:
+                logger.debug(f"Карта {card_name} (нормализовано: {normalized_base_name}) уже имеет file_id, пропускаем")
+    
+    logger.info(f"Будет загружено {len(files_to_upload)} файлов (из {len(png_files)} всего)")
     
     # Инициализируем бота
     bot = Bot(token=settings.BOT_TOKEN)
@@ -158,8 +268,8 @@ async def upload_cards_to_bot():
                     raise
                 logger.error(f"Ошибка при отправке spy.png: {e}")
         
-        # Обрабатываем остальные карты
-        for idx, image_path in enumerate(png_files, 1):
+        # Обрабатываем остальные карты (только те, которые нужны)
+        for idx, image_path in enumerate(files_to_upload, 1):
             # Пропускаем spy.png, так как уже обработали
             if image_path.name == "spy.png":
                 continue
@@ -173,7 +283,7 @@ async def upload_cards_to_bot():
             else:
                 base_name = card_name
             
-            logger.info(f"[{idx}/{len(png_files)}] Отправка карты: {card_name}")
+            logger.info(f"[{idx}/{len(files_to_upload)}] Отправка карты: {card_name}")
             
             try:
                 # Отправляем фото в бота
@@ -190,20 +300,59 @@ async def upload_cards_to_bot():
                     # Сохраняем в БД
                     async for db in get_db():
                         try:
-                            # Ищем карту по базовому имени
-                            result = await db.execute(
-                                select(ClashRoyaleCard).where(ClashRoyaleCard.name == base_name)
-                            )
-                            card = result.scalar_one_or_none()
+                            # Ищем карту по нормализованному имени (более надежно)
+                            normalized_search = normalize_name(base_name)
+                            result = await db.execute(select(ClashRoyaleCard))
+                            all_cards_search = result.scalars().all()
+                            card = None
+                            
+                            # Сначала пробуем точное совпадение
+                            for c in all_cards_search:
+                                if c.name == base_name:
+                                    card = c
+                                    logger.debug(f"Найдена карта '{c.name}' по точному совпадению с '{base_name}'")
+                                    break
+                            
+                            # Если не нашли, пробуем найти по нормализованному имени
+                            if not card:
+                                for c in all_cards_search:
+                                    if normalize_name(c.name) == normalized_search:
+                                        card = c
+                                        logger.info(f"Найдена карта '{c.name}' по нормализованному имени '{base_name}' (нормализовано: {normalized_search})")
+                                        break
                             
                             if card:
+                                # Используем имя карты из БД для логирования
+                                db_card_name = card.name
+                                was_updated = False
+                                
                                 if is_evolution:
-                                    card.file_id_evolution = file_id
-                                    card.has_evolution = True
-                                    logger.info(f"✓ Обновлен file_id_evolution для {base_name} в БД")
+                                    # Обновляем file_id_evolution только если его еще нет
+                                    current_evo_id = card.file_id_evolution
+                                    if not current_evo_id or not current_evo_id.strip():
+                                        card.file_id_evolution = file_id
+                                        card.has_evolution = True
+                                        was_updated = True
+                                        logger.info(f"✓ Обновлен file_id_evolution для '{db_card_name}' (файл: {base_name}) в БД: {file_id[:30]}...")
+                                    else:
+                                        logger.warning(f"⚠ Карта '{db_card_name}' (файл: {base_name}) УЖЕ имеет file_id_evolution: {current_evo_id[:30]}...")
                                 else:
-                                    card.file_id = file_id
-                                    logger.info(f"✓ Обновлен file_id для {base_name} в БД")
+                                    # Обновляем file_id только если его еще нет
+                                    current_file_id = card.file_id
+                                    if not current_file_id or not current_file_id.strip():
+                                        card.file_id = file_id
+                                        was_updated = True
+                                        logger.info(f"✓ Обновлен file_id для '{db_card_name}' (файл: {base_name}) в БД: {file_id[:30]}...")
+                                    else:
+                                        logger.warning(f"⚠ Карта '{db_card_name}' (файл: {base_name}) УЖЕ имеет file_id: {current_file_id[:30]}...")
+                                        logger.warning(f"  Это означает, что карта была обработана ранее или есть дубликат в БД")
+                                        
+                                # Сохраняем изменения в БД ТОЛЬКО если что-то изменилось
+                                if was_updated:
+                                    await db.commit()
+                                    logger.debug(f"✓ Изменения сохранены в БД для '{db_card_name}'")
+                                else:
+                                    logger.debug(f"  Изменения не требуются для '{db_card_name}'")
                             else:
                                 # Создаем новую карту (если нет в БД)
                                 # Пытаемся получить данные из JSON, если есть
@@ -234,8 +383,8 @@ async def upload_cards_to_bot():
                                 )
                                 db.add(new_card)
                                 logger.info(f"✓ Создана новая карта {base_name} в БД")
-                            
-                            await db.commit()
+                                await db.commit()
+                                logger.debug(f"✓ Новая карта сохранена в БД: {base_name}")
                         except Exception as e:
                             await db.rollback()
                             logger.error(f"Ошибка при сохранении {card_name} в БД: {e}")
@@ -265,7 +414,7 @@ async def upload_cards_to_bot():
                 logger.error(f"Ошибка при отправке {card_name}: {e}")
                 continue
         
-        logger.info(f"✓ Всего обработано {len(png_files)} файлов")
+        logger.info(f"✓ Всего обработано {len(files_to_upload)} файлов")
         logger.info(f"✓ Сохранено {len(message_ids_to_delete)} сообщений для удаления")
         
         # Удаляем все сообщения в конце (опционально)

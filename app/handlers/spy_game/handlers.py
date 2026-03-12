@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from typing import List
+from typing import List, Optional
 
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
@@ -11,13 +11,34 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.bot import bot
 
 from app.database import get_db
-from app.handlers.spy_game.game_manager import game_manager
+from app.handlers.spy_game.game_manager import game_manager, Game
 from app.handlers.spy_game.states import SpyGameStates
 from app.models import ClashRoyaleCard, SpyCard
 from app.utils.logger import logger
 from sqlalchemy import select, and_
 
 router = Router()
+
+
+async def get_game_from_state(state: FSMContext, user_id: int) -> Optional[Game]:
+    """Получает игру из состояния, используя creator_id."""
+    data = await state.get_data()
+    creator_id = data.get("creator_id", user_id)
+    game = game_manager.get_game(creator_id)
+    if not game:
+        logger.warning(f"Игра не найдена для creator_id {creator_id}, пробуем user_id {user_id}")
+        game = game_manager.get_game(user_id)
+        if game:
+            # Сохраняем creator_id для будущего использования
+            await state.update_data(creator_id=user_id)
+    return game
+
+
+async def stop_game_from_state(state: FSMContext, user_id: int):
+    """Останавливает игру, используя creator_id из состояния."""
+    data = await state.get_data()
+    creator_id = data.get("creator_id", user_id)
+    game_manager.stop_game(creator_id)
 
 
 def create_number_keyboard(min_val: int, max_val: int, callback_prefix: str, add_random: bool = False) -> InlineKeyboardMarkup:
@@ -306,10 +327,12 @@ async def handle_player_name_input_in_game(message: Message, state: FSMContext):
 @router.message(Command("spy"))
 async def cmd_spy(message: Message, state: FSMContext):
     """Команда для начала игры Шпион."""
+    user_id = message.from_user.id
     game_id = str(uuid.uuid4())[:8]
-    game = game_manager.create_game(message.from_user.id, game_id)
+    game = game_manager.create_game(user_id, game_id)
     
-    await state.update_data(game_id=game_id)
+    # Сохраняем creator_id в состоянии для дальнейшего использования
+    await state.update_data(game_id=game_id, creator_id=user_id)
     await state.set_state(SpyGameStates.waiting_for_game_selection)
     
     # Клавиатура выбора игры
@@ -435,6 +458,21 @@ async def setup_game_with_players(message, state: FSMContext, players_list: list
     game_type = data.get("game_type", "clash_royale")
     use_evolutions = data.get("use_evolutions", False)
     
+    # Получаем creator_id из состояния (сохранен при создании первой игры)
+    creator_id = data.get("creator_id", message.from_user.id)
+    
+    # Получаем существующую игру или создаем новую
+    game = game_manager.get_game(creator_id)
+    if not game:
+        # Если игры нет, создаем новую
+        import uuid
+        game_id = str(uuid.uuid4())
+        game = game_manager.create_game(creator_id, game_id)
+        await state.update_data(game_id=game_id, creator_id=creator_id)
+        logger.info(f"Создана новая игра {game_id} для пользователя {creator_id}")
+    else:
+        logger.info(f"Используем существующую игру {game.game_id} для пользователя {creator_id}")
+    
     # Загружаем карты из базы данных
     cards_list = []
     async for db in get_db():
@@ -445,6 +483,9 @@ async def setup_game_with_players(message, state: FSMContext, players_list: list
                 
                 logger.info(f"Всего карт в БД: {len(all_cards)}")
                 
+                # Фильтруем карты: берем только те, у которых есть основной file_id
+                # ВАЖНО: file_id_evolution НЕ считается отдельной картой для игры
+                # Для игры нужен только основной file_id карты
                 cards_list = [
                     {
                         "name": card.name,
@@ -456,7 +497,28 @@ async def setup_game_with_players(message, state: FSMContext, players_list: list
                     if card.file_id and card.file_id.strip()
                 ]
                 
-                logger.info(f"Карт с file_id: {len(cards_list)}")
+                # Подсчитываем статистику
+                cards_without_file_id = [c for c in all_cards if not c.file_id or not c.file_id.strip()]
+                cards_with_evolution = [c for c in all_cards if c.has_evolution]
+                cards_with_evo_file_id = [c for c in all_cards if c.file_id_evolution and c.file_id_evolution.strip()]
+                
+                logger.info(f"Карт с основным file_id (для игры): {len(cards_list)}")
+                logger.info(f"Всего карт в БД: {len(all_cards)}")
+                logger.info(f"  - С основным file_id: {len(cards_list)}")
+                logger.info(f"  - БЕЗ основного file_id: {len(cards_without_file_id)}")
+                logger.info(f"  - С эволюциями (has_evolution=True): {len(cards_with_evolution)}")
+                logger.info(f"  - С file_id_evolution: {len(cards_with_evo_file_id)}")
+                
+                # Предупреждение, если карт меньше ожидаемого
+                # ВНИМАНИЕ: Для игры нужны только карты с ОСНОВНЫМ file_id (не file_id_evolution)
+                # Ожидается ~121 карта с основным file_id (все обычные карты)
+                # file_id_evolution используется отдельно только если включены эволюции
+                if len(cards_list) < 121:
+                    logger.warning(
+                        f"ВНИМАНИЕ: Ожидается ~121 карта с основным file_id для игры, но найдено только {len(cards_list)}. "
+                        f"Возможно, не все карты были загружены в бота для получения file_id. "
+                        f"Примечание: file_id_evolution не учитывается в этом подсчете (это отдельный file_id для эволюций)."
+                    )
                 
                 if not cards_list and all_cards:
                     logger.warning(
@@ -472,27 +534,51 @@ async def setup_game_with_players(message, state: FSMContext, players_list: list
             "❌ Карты не найдены в базе данных. Пожалуйста, сначала загрузите карты."
         )
         await state.clear()
+        await stop_game_from_state(state, message.from_user.id)
         return
     
     # Настраиваем игру
-    game = game_manager.setup_game(
-        message.from_user.id,
-        players_list,
-        spies_count,
-        cards_list,
-        use_evolutions=use_evolutions
-    )
-    
-    if not game:
-        await message.answer("❌ Ошибка при создании игры")
+    try:
+        # Используем creator_id из состояния, а не message.from_user.id
+        creator_id = data.get("creator_id", message.from_user.id)
+        game = game_manager.setup_game(
+            creator_id,
+            players_list,
+            spies_count,
+            cards_list,
+            use_evolutions=use_evolutions
+        )
+        
+        if not game:
+            logger.error(f"Ошибка: setup_game вернул None для creator_id {creator_id}")
+            await message.answer("❌ Ошибка при создании игры")
+            await state.clear()
+            await stop_game_from_state(state, message.from_user.id)
+            return
+    except Exception as e:
+        logger.error(f"Ошибка при настройке игры: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка при создании игры: {str(e)}")
         await state.clear()
+        await stop_game_from_state(state, message.from_user.id)
         return
     
     await state.set_state(SpyGameStates.showing_cards)
-    await state.update_data(current_player_index=0)
+    
+    # Убеждаемся, что current_player_index установлен правильно
+    if game.current_player_index >= len(game.players):
+        game.current_player_index = 0
+        logger.warning(f"Исправлен current_player_index: был {game.current_player_index}, установлен 0")
+    
+    await state.update_data(current_player_index=game.current_player_index)
     
     # Показываем карту первому игроку
-    await show_player_card(message, state, game)
+    try:
+        await show_player_card(message, state, game)
+    except Exception as e:
+        logger.error(f"Ошибка при показе карты игроку: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка при показе карты: {str(e)}")
+        await state.clear()
+        await stop_game_from_state(state, message.from_user.id)
 
 
 async def show_players_management(message, state: FSMContext, players_count: int):
@@ -662,6 +748,9 @@ async def handle_start_game_setup(callback: CallbackQuery, state: FSMContext):
                 
                 logger.info(f"Всего карт в БД: {len(all_cards)}")
                 
+                # Фильтруем карты: берем только те, у которых есть основной file_id
+                # ВАЖНО: file_id_evolution НЕ считается отдельной картой для игры
+                # Для игры нужен только основной file_id карты
                 cards_list = [
                     {
                         "name": card.name,
@@ -673,7 +762,28 @@ async def handle_start_game_setup(callback: CallbackQuery, state: FSMContext):
                     if card.file_id and card.file_id.strip()
                 ]
                 
-                logger.info(f"Карт с file_id: {len(cards_list)}")
+                # Подсчитываем статистику
+                cards_without_file_id = [c for c in all_cards if not c.file_id or not c.file_id.strip()]
+                cards_with_evolution = [c for c in all_cards if c.has_evolution]
+                cards_with_evo_file_id = [c for c in all_cards if c.file_id_evolution and c.file_id_evolution.strip()]
+                
+                logger.info(f"Карт с основным file_id (для игры): {len(cards_list)}")
+                logger.info(f"Всего карт в БД: {len(all_cards)}")
+                logger.info(f"  - С основным file_id: {len(cards_list)}")
+                logger.info(f"  - БЕЗ основного file_id: {len(cards_without_file_id)}")
+                logger.info(f"  - С эволюциями (has_evolution=True): {len(cards_with_evolution)}")
+                logger.info(f"  - С file_id_evolution: {len(cards_with_evo_file_id)}")
+                
+                # Предупреждение, если карт меньше ожидаемого
+                # ВНИМАНИЕ: Для игры нужны только карты с ОСНОВНЫМ file_id (не file_id_evolution)
+                # Ожидается ~121 карта с основным file_id (все обычные карты)
+                # file_id_evolution используется отдельно только если включены эволюции
+                if len(cards_list) < 121:
+                    logger.warning(
+                        f"ВНИМАНИЕ: Ожидается ~121 карта с основным file_id для игры, но найдено только {len(cards_list)}. "
+                        f"Возможно, не все карты были загружены в бота для получения file_id. "
+                        f"Примечание: file_id_evolution не учитывается в этом подсчете (это отдельный file_id для эволюций)."
+                    )
                 
                 if not cards_list and all_cards:
                     logger.warning(
@@ -721,10 +831,22 @@ async def handle_start_game_setup(callback: CallbackQuery, state: FSMContext):
 
 async def show_player_card(message, state: FSMContext, game):
     """Показывает карту текущему игроку."""
+    # Проверяем состояние игры
+    if not game.players:
+        logger.error(f"В игре нет игроков для пользователя {game.creator_id}")
+        await message.answer("❌ Ошибка: в игре нет игроков")
+        return
+    
+    # Убеждаемся, что индекс в пределах
+    if game.current_player_index >= len(game.players):
+        logger.warning(f"Индекс игрока {game.current_player_index} выходит за границы, сбрасываем на 0")
+        game.current_player_index = 0
+    
     current_player = game.get_current_player()
     
     if not current_player:
         # Все игроки увидели карты, начинаем игру
+        logger.info(f"Все игроки увидели карты, начинаем игру")
         await start_game(message, state, game)
         return
     
@@ -733,7 +855,6 @@ async def show_player_card(message, state: FSMContext, game):
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_game")]
     ])
     
-    current_player = game.get_current_player()
     player_name = current_player.username if current_player else f"Игрок {game.current_player_index + 1}"
     
     text = (
@@ -750,109 +871,85 @@ async def show_player_card(message, state: FSMContext, game):
 @router.callback_query(F.data == "show_card", StateFilter(SpyGameStates.showing_cards))
 async def handle_show_card(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает показ карты игроку."""
-    game = game_manager.get_game(callback.from_user.id)
-    if not game:
-        await callback.answer("Игра не найдена", show_alert=True)
-        return
-    
-    current_player = game.get_current_player()
-    if not current_player:
-        await callback.answer("Ошибка", show_alert=True)
-        return
-    
-    current_player.has_seen_card = True
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🙈 Скрыть карту", callback_data="hide_card")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_game")]
-    ])
-    
-    chat_id = callback.message.chat.id
-    game.card_messages_ids.clear()  # Очищаем предыдущие сообщения
-    
-    if current_player.is_spy:
-        # Шпион видит картинку шпиона
-        # Загружаем картинку шпиона из БД
-        spy_file_id = None
-        async for db in get_db():
-            try:
-                result = await db.execute(
-                    select(SpyCard).where(SpyCard.name == "spy")
-                )
-                spy_card = result.scalar_one_or_none()
-                if spy_card and spy_card.file_id:
-                    spy_file_id = spy_card.file_id
-            except Exception as e:
-                logger.error(f"Ошибка при загрузке карты шпиона: {e}", exc_info=True)
-            break
+    try:
+        # Получаем creator_id из состояния
+        data = await state.get_data()
+        creator_id = data.get("creator_id", callback.from_user.id)
         
-        text = (
-            "🕵️ <b>ВЫ ШПИОН!</b>\n\n"
-            "Ваша задача - не выдать себя и вычислить тему игры."
-        )
+        game = game_manager.get_game(creator_id)
+        if not game:
+            logger.error(f"Игра не найдена для creator_id {creator_id} (пользователь: {callback.from_user.id})")
+            await callback.answer("Игра не найдена", show_alert=True)
+            return
         
-        # Отправляем картинку шпиона с текстом и кнопками в одном сообщении
-        if spy_file_id:
-            message = await bot.send_photo(
-                chat_id=chat_id,
-                photo=spy_file_id,
-                caption=text,
-                reply_markup=keyboard
-            )
-            game.card_messages_ids.append(message.message_id)
-        else:
-            # Если нет картинки, отправляем только текст
-            message = await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard
-            )
-            game.card_messages_ids.append(message.message_id)
+        # Проверяем состояние игры
+        logger.debug(f"Игра найдена: creator_id={creator_id}, players_count={len(game.players)}, current_player_index={game.current_player_index}")
         
-    else:
-        # Обычный игрок видит карту
-        if current_player.has_evolution and current_player.file_id_evolution:
-            # Карта с эволюцией - отправляем обе картинки в media group
-            # Текст и кнопки будут в caption последней картинки
-            media_list = []
+        if not game.players:
+            logger.error(f"В игре нет игроков для creator_id {creator_id}. Игроки: {game.players}")
+            await callback.answer("Ошибка: в игре нет игроков", show_alert=True)
+            return
+        
+        # Проверяем индекс игрока
+        if game.current_player_index >= len(game.players):
+            logger.error(f"Индекс игрока {game.current_player_index} выходит за границы списка игроков ({len(game.players)})")
+            # Исправляем индекс
+            game.current_player_index = 0
+            logger.info(f"Индекс игрока сброшен на 0")
+        
+        current_player = game.get_current_player()
+        if not current_player:
+            logger.error(
+                f"Текущий игрок не найден в игре для creator_id {creator_id}. "
+                f"current_player_index={game.current_player_index}, players_count={len(game.players)}, "
+                f"players={[p.username for p in game.players]}"
+            )
+            await callback.answer("Ошибка: текущий игрок не найден", show_alert=True)
+            return
+        
+        current_player.has_seen_card = True
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🙈 Скрыть карту", callback_data="hide_card")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_game")]
+        ])
+        
+        chat_id = callback.message.chat.id
+        
+        # Удаляем старое сообщение с кнопкой "Открыть карту"
+        try:
+            await callback.message.delete()
+        except Exception as e:
+            logger.debug(f"Не удалось удалить старое сообщение: {e}")
+        
+        game.card_messages_ids.clear()  # Очищаем предыдущие сообщения
+        
+        if current_player.is_spy:
+            # Шпион видит картинку шпиона
+            # Загружаем картинку шпиона из БД
+            spy_file_id = None
+            async for db in get_db():
+                try:
+                    result = await db.execute(
+                        select(SpyCard).where(SpyCard.name == "spy")
+                    )
+                    spy_card = result.scalar_one_or_none()
+                    if spy_card and spy_card.file_id:
+                        spy_file_id = spy_card.file_id
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке карты шпиона: {e}", exc_info=True)
+                break
             
-            if current_player.file_id:
-                media_list.append(InputMediaPhoto(media=current_player.file_id))
-            
-            # Текст и кнопки добавляем к последней картинке (эволюции)
-            caption = (
-                f"🎴 <b>Ваша карта:</b> {current_player.card_name}\n\n"
-                "✨ <b>У этой карты есть эволюция!</b>\n\n"
-                "Выше показаны оба варианта:"
+            text = (
+                "🕵️ <b>ВЫ ШПИОН!</b>\n\n"
+                "Ваша задача - не выдать себя и вычислить тему игры."
             )
             
-            media_list.append(InputMediaPhoto(
-                media=current_player.file_id_evolution,
-                caption=caption
-            ))
-            
-            # Отправляем media group
-            messages = await bot.send_media_group(chat_id=chat_id, media=media_list)
-            game.card_messages_ids.extend([msg.message_id for msg in messages])
-            
-            # Редактируем последнее сообщение из media group, добавляя кнопки
-            # В Telegram нельзя добавить inline кнопки к media group напрямую,
-            # поэтому отправляем отдельное сообщение с кнопками сразу после
-            text_message = await bot.send_message(
-                chat_id=chat_id,
-                text=" ",  # Минимальный текст
-                reply_markup=keyboard
-            )
-            game.card_messages_ids.append(text_message.message_id)
-            
-        else:
-            # Обычная карта без эволюции - все в одном сообщении
-            text = f"🎴 <b>Ваша карта:</b> {current_player.card_name}"
-            
-            if current_player.file_id:
+            # Отправляем картинку шпиона с текстом и кнопками в одном сообщении
+            if spy_file_id:
                 message = await bot.send_photo(
                     chat_id=chat_id,
-                    photo=current_player.file_id,
+                    photo=spy_file_id,
                     caption=text,
                     reply_markup=keyboard
                 )
@@ -865,14 +962,77 @@ async def handle_show_card(callback: CallbackQuery, state: FSMContext):
                     reply_markup=keyboard
                 )
                 game.card_messages_ids.append(message.message_id)
-    
-    await callback.answer()
+        
+        else:
+            # Обычный игрок видит карту
+            card_name = current_player.card_name or "Неизвестная карта"
+            
+            if current_player.has_evolution and current_player.file_id_evolution:
+                    # Карта с эволюцией - отправляем обе картинки в media group
+                    media_list = []
+                    
+                    if current_player.file_id:
+                        media_list.append(InputMediaPhoto(media=current_player.file_id))
+                    
+                    # Текст добавляем к последней картинке (эволюции)
+                    caption = (
+                        f"🎴 <b>Ваша карта:</b> {card_name}\n\n"
+                        "✨ <b>У этой карты есть эволюция!</b>\n\n"
+                        "Выше показаны оба варианта:"
+                    )
+                    
+                    media_list.append(InputMediaPhoto(
+                        media=current_player.file_id_evolution,
+                        caption=caption
+                    ))
+                    
+                    # Отправляем media group
+                    messages = await bot.send_media_group(chat_id=chat_id, media=media_list)
+                    game.card_messages_ids.extend([msg.message_id for msg in messages])
+                    
+                    # В Telegram нельзя добавить inline кнопки к media group напрямую,
+                    # поэтому отправляем отдельное сообщение с кнопками
+                    text_message = await bot.send_message(
+                        chat_id=chat_id,
+                        text="🎮 Используйте кнопки ниже:",
+                        reply_markup=keyboard
+                    )
+                    game.card_messages_ids.append(text_message.message_id)
+            
+            else:
+                # Обычная карта без эволюции - все в одном сообщении
+                text = f"🎴 <b>Ваша карта:</b> {card_name}"
+                
+                if current_player.file_id:
+                    message = await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=current_player.file_id,
+                        caption=text,
+                        reply_markup=keyboard
+                    )
+                    game.card_messages_ids.append(message.message_id)
+                else:
+                    # Если нет картинки, отправляем только текст
+                    message = await bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        reply_markup=keyboard
+                    )
+                    game.card_messages_ids.append(message.message_id)
+        
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Ошибка при показе карты игроку: {e}", exc_info=True)
+        try:
+            await callback.answer(f"❌ Ошибка: {str(e)}", show_alert=True)
+        except:
+            pass
 
 
 @router.callback_query(F.data == "hide_card", StateFilter(SpyGameStates.showing_cards))
 async def handle_hide_card(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает скрытие карты и переход к следующему игроку."""
-    game = game_manager.get_game(callback.from_user.id)
+    game = await get_game_from_state(state, callback.from_user.id)
     if not game:
         await callback.answer("Игра не найдена", show_alert=True)
         return
@@ -909,63 +1069,94 @@ async def start_game(message, state: FSMContext, game):
         [InlineKeyboardButton(text="⏹️ Остановить игру", callback_data="stop_game")]
     ])
     
+    # Получаем длительность таймера для начального сообщения
+    from app.config import settings
+    duration = settings.GAME_TIMER_DURATION
+    minutes = duration // 60
+    seconds = duration % 60
+    
     # Игра начинается одинаково для всех (не показываем что все шпионы)
     text = (
         "🎮 <b>Игра началась!</b>\n\n"
-        "⏱️ Таймер запущен. Обсудите и найдите шпионов!"
+        f"⏱️ <b>Время:</b> {minutes}:{seconds:02d}\n\n"
+        "Обсудите и найдите шпионов!"
     )
     
     try:
-        await message.edit_text(text, reply_markup=keyboard)
+        timer_message = await message.edit_text(text, reply_markup=keyboard)
+        game.timer_message_id = timer_message.message_id
+        game.timer_chat_id = message.chat.id
     except:
-        await message.answer(text, reply_markup=keyboard)
+        timer_message = await message.answer(text, reply_markup=keyboard)
+        game.timer_message_id = timer_message.message_id
+        game.timer_chat_id = message.chat.id
     
-    # Запускаем таймер
+    # Запускаем таймер (будет редактировать это же сообщение)
     await start_timer(message, state, game)
 
 
 async def start_timer(message, state: FSMContext, game):
-    """Запускает таймер игры."""
+    """Запускает таймер игры (обновляет каждые 10 секунд)."""
     from app.config import settings
     from app.bot import bot
     
     duration = settings.GAME_TIMER_DURATION
-    chat_id = message.chat.id
-    
-    timer_message = await bot.send_message(
-        chat_id,
-        f"⏱️ <b>Время:</b> {duration // 60}:{duration % 60:02d}"
-    )
-    
-    game.timer_message_id = timer_message.message_id
-    game.timer_chat_id = chat_id
     
     async def timer_task():
         remaining = duration
         try:
             while remaining > 0 and game.is_active:
-                await asyncio.sleep(1)
-                remaining -= 1
+                # Обновляем каждые 10 секунд вместо каждой секунды
+                await asyncio.sleep(10)
+                remaining -= 10
+                
+                # Если осталось меньше 10 секунд, устанавливаем на 0
+                if remaining < 0:
+                    remaining = 0
                 
                 minutes = remaining // 60
                 seconds = remaining % 60
                 
+                # Обновляем то же сообщение, где "Игра началась!"
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🕵️ Угадать тему", callback_data="guess_theme")],
+                    [InlineKeyboardButton(text="🗳️ Голосовать", callback_data="start_voting")],
+                    [InlineKeyboardButton(text="⏹️ Остановить игру", callback_data="stop_game")]
+                ])
+                
+                text = (
+                    "🎮 <b>Игра началась!</b>\n\n"
+                    f"⏱️ <b>Время:</b> {minutes}:{seconds:02d}\n\n"
+                    "Обсудите и найдите шпионов!"
+                )
+                
                 try:
                     await bot.edit_message_text(
-                        f"⏱️ <b>Время:</b> {minutes}:{seconds:02d}",
+                        text,
                         chat_id=game.timer_chat_id,
-                        message_id=game.timer_message_id
+                        message_id=game.timer_message_id,
+                        reply_markup=keyboard
                     )
-                except:
-                    pass
+                except Exception as e:
+                    # Игнорируем ошибки редактирования (сообщение может быть удалено)
+                    logger.debug(f"Не удалось обновить таймер: {e}")
                 
             if remaining == 0 and game.is_active:
                 game.timer_expired = True
-                await bot.edit_message_text(
-                    "⏰ <b>Время вышло!</b>\n\nНачните голосование.",
-                    chat_id=game.timer_chat_id,
-                    message_id=game.timer_message_id
-                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🕵️ Угадать тему", callback_data="guess_theme")],
+                    [InlineKeyboardButton(text="🗳️ Голосовать", callback_data="start_voting")],
+                    [InlineKeyboardButton(text="⏹️ Остановить игру", callback_data="stop_game")]
+                ])
+                try:
+                    await bot.edit_message_text(
+                        "⏰ <b>Время вышло!</b>\n\nНачните голосование.",
+                        chat_id=game.timer_chat_id,
+                        message_id=game.timer_message_id,
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                    logger.debug(f"Не удалось обновить сообщение о завершении таймера: {e}")
         except asyncio.CancelledError:
             pass
     
@@ -975,9 +1166,11 @@ async def start_timer(message, state: FSMContext, game):
 @router.callback_query(F.data == "stop_game", StateFilter(SpyGameStates.game_in_progress))
 async def handle_stop_game(callback: CallbackQuery, state: FSMContext):
     """Останавливает игру."""
-    game = game_manager.get_game(callback.from_user.id)
+    data = await state.get_data()
+    creator_id = data.get("creator_id", callback.from_user.id)
+    game = game_manager.get_game(creator_id)
     if game:
-        game_manager.stop_game(callback.from_user.id)
+        game_manager.stop_game(creator_id)
     
     await state.clear()
     await callback.message.edit_text("⏹️ Игра остановлена")
@@ -987,7 +1180,7 @@ async def handle_stop_game(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "start_voting", StateFilter(SpyGameStates.game_in_progress))
 async def handle_start_voting(callback: CallbackQuery, state: FSMContext):
     """Начинает голосование."""
-    game = game_manager.get_game(callback.from_user.id)
+    game = await get_game_from_state(state, callback.from_user.id)
     if not game:
         await callback.answer("Игра не найдена", show_alert=True)
         return
@@ -1063,7 +1256,7 @@ async def handle_timer_end(message, state: FSMContext, game):
 @router.callback_query(F.data.startswith("vote:"), StateFilter(SpyGameStates.voting))
 async def handle_vote(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает голос."""
-    game = game_manager.get_game(callback.from_user.id)
+    game = await get_game_from_state(state, callback.from_user.id)
     if not game:
         await callback.answer("Игра не найдена", show_alert=True)
         return
@@ -1116,7 +1309,9 @@ async def handle_vote(callback: CallbackQuery, state: FSMContext):
                 "🎉 <b>Игроки победили!</b>\n"
                 f"Осталось 2 человека, среди них нет шпионов!"
             )
-        game_manager.stop_game(callback.from_user.id)
+        data = await state.get_data()
+        creator_id = data.get("creator_id", callback.from_user.id)
+        game_manager.stop_game(creator_id)
         await state.clear()
     elif game_result == 'spies_win':
         spies_remaining = len(game.get_spies())
@@ -1132,7 +1327,9 @@ async def handle_vote(callback: CallbackQuery, state: FSMContext):
             "🕵️ <b>Шпионы победили!</b>\n"
             f"Осталось 2 человека, среди них есть шпион(ы)!"
         )
-        game_manager.stop_game(callback.from_user.id)
+        data = await state.get_data()
+        creator_id = data.get("creator_id", callback.from_user.id)
+        game_manager.stop_game(creator_id)
         await state.clear()
     else:
         remaining_players = len(game.players)
@@ -1153,7 +1350,7 @@ async def handle_vote(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "cancel_game")
 async def handle_cancel_game(callback: CallbackQuery, state: FSMContext):
     """Отменяет игру."""
-    game = game_manager.get_game(callback.from_user.id)
+    game = await get_game_from_state(state, callback.from_user.id)
     if game:
         # Удаляем все сообщения с картинками
         chat_id = callback.message.chat.id
@@ -1163,7 +1360,9 @@ async def handle_cancel_game(callback: CallbackQuery, state: FSMContext):
             except Exception as e:
                 logger.debug(f"Не удалось удалить сообщение {msg_id}: {e}")
         
-        game_manager.stop_game(callback.from_user.id)
+        data = await state.get_data()
+        creator_id = data.get("creator_id", callback.from_user.id)
+        game_manager.stop_game(creator_id)
     
     await state.clear()
     await callback.message.edit_text("❌ Игра отменена")
@@ -1181,7 +1380,7 @@ async def handle_cancel_voting(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "guess_theme", StateFilter(SpyGameStates.game_in_progress))
 async def handle_guess_theme(callback: CallbackQuery, state: FSMContext):
     """Обрабатывает попытку угадать тему игры."""
-    game = game_manager.get_game(callback.from_user.id)
+    game = await get_game_from_state(state, callback.from_user.id)
     if not game:
         await callback.answer("Игра не найдена", show_alert=True)
         return
@@ -1215,7 +1414,7 @@ async def handle_guess_input(message: Message, state: FSMContext):
         await message.answer("❌ Введите название карты. Попробуйте снова:")
         return
     
-    game = game_manager.get_game(message.from_user.id)
+    game = await get_game_from_state(state, message.from_user.id)
     if not game:
         await state.clear()
         await message.answer("❌ Игра не найдена")
@@ -1257,7 +1456,7 @@ async def handle_guess_input(message: Message, state: FSMContext):
             f"Игра окончена."
         )
         
-        game_manager.stop_game(message.from_user.id)
+        await stop_game_from_state(state, message.from_user.id)
         await state.clear()
     else:
         # Шпион не угадал - он выбывает
@@ -1291,7 +1490,7 @@ async def handle_guess_input(message: Message, state: FSMContext):
                     await save_player_stats(player.username, win=True, win_type="last_standing")
             
             await message.answer(text)
-            game_manager.stop_game(message.from_user.id)
+            await stop_game_from_state(state, message.from_user.id)
             await state.clear()
         elif game_result == 'spies_win':
             # Осталось 2 человека, среди них есть шпион
@@ -1307,7 +1506,7 @@ async def handle_guess_input(message: Message, state: FSMContext):
                     await save_player_stats(player.username, win=True, win_type="last_standing")
             
             await message.answer(text)
-            game_manager.stop_game(message.from_user.id)
+            await stop_game_from_state(state, message.from_user.id)
             await state.clear()
         else:
             # Игра продолжается

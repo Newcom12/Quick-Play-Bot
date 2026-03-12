@@ -212,7 +212,9 @@ class GameManager:
                 players.append(player)
         
         game.players = players
+        game.current_player_index = 0  # Сбрасываем индекс на начало
         logger.info(f"Игра настроена: {players_count} игроков, {spies_count} шпионов, тема: {game.game_theme}")
+        logger.info(f"Игроки созданы: {[p.username for p in players]}")
         return game
     
     def check_guess(self, user_id: int, guessed_theme: str) -> tuple[bool, Optional[str]]:
